@@ -46,6 +46,9 @@ try {
   if (rejected.isError !== true) {
     throw new Error('Path policy did not reject project discovery outside the configured root.');
   }
+  if (JSON.stringify(rejected).includes(outsideRoot)) {
+    throw new Error('Path policy response leaked the rejected host path.');
+  }
 
   const accepted = await client.callTool(
     { name: 'list_projects', arguments: { directory: allowedRoot, recursive: false } },

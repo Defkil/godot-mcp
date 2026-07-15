@@ -53,6 +53,13 @@ export function parseAllowedDirectories(
     .filter(Boolean);
 }
 
+export function isUncPath(
+  rawPath: string,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  return platform === 'win32' && /^[\\/]{2}/.test(rawPath);
+}
+
 function rejectUnsafeSyntax(rawPath: string): void {
   if (typeof rawPath !== 'string' || rawPath.trim().length === 0) {
     throw new PathPolicyError('INVALID_PATH', 'A non-empty filesystem path is required.');
@@ -135,11 +142,7 @@ export class PathPolicy {
   }
 
   private rejectImplicitUnc(rawPath: string): void {
-    if (
-      process.platform === 'win32' &&
-      rawPath.startsWith('\\\\') &&
-      !this.allowedRoots.some((root) => root.startsWith('\\\\'))
-    ) {
+    if (isUncPath(rawPath) && !this.allowedRoots.some((root) => isUncPath(root))) {
       throw new PathPolicyError(
         'OUTSIDE_ALLOWED_ROOTS',
         'UNC paths require an explicitly configured UNC allowed root.'

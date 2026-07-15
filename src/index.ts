@@ -3314,7 +3314,11 @@ export class GodotServer {
         );
       } catch (error: unknown) {
         if (error instanceof PathPolicyError) {
-          return createErrorResponse(`Path policy rejected the request: ${error.message}`);
+          const message =
+            error.code === 'OUTSIDE_ALLOWED_ROOTS'
+              ? 'The requested path is outside the configured project roots.'
+              : 'The requested filesystem path is invalid.';
+          return createErrorResponse(`Path policy rejected the request: ${message}`);
         }
         throw error;
       }

@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   PathPolicy,
   PathPolicyError,
+  isUncPath,
   parseAllowedDirectories,
   secureToolArguments,
 } from '../src/security/path-policy.js';
@@ -32,6 +33,13 @@ afterEach(() => {
 });
 
 describe('parseAllowedDirectories', () => {
+  it('recognizes Windows UNC paths with either separator style', () => {
+    expect(isUncPath('\\\\server\\share', 'win32')).toBe(true);
+    expect(isUncPath('//server/share', 'win32')).toBe(true);
+    expect(isUncPath('C:\\Games', 'win32')).toBe(false);
+    expect(isUncPath('//server/share', 'linux')).toBe(false);
+  });
+
   it('accepts JSON arrays and rejects malformed JSON arrays', () => {
     expect(parseAllowedDirectories('["/one", "/two"]', 'linux')).toEqual(['/one', '/two']);
     expect(() => parseAllowedDirectories('["/one"', 'linux')).toThrow(PathPolicyError);
