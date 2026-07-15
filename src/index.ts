@@ -40,6 +40,7 @@ import {
   collectGdPaths,
   type OperationParams,
 } from './utils.js';
+import { getMetadata } from './metadata.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -159,11 +160,13 @@ class GodotServer {
     this.validateScriptPath = join(__dirname, 'scripts', 'validate_script.gd');
     if (debugMode) console.error(`[DEBUG] Operations script path: ${this.operationsScriptPath}`);
 
+    const metadata = getMetadata();
+
     // Initialize the MCP server
     this.server = new Server(
       {
-        name: 'godot-mcp',
-        version: '0.1.0',
+        name: metadata.mcpName,
+        version: metadata.version,
       },
       {
         capabilities: {

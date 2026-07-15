@@ -1,7 +1,7 @@
 {
-  "name": "@tugcantopaloglu/godot-mcp",
+  "name": "gi-go-mcp",
   "version": "3.1.0",
-  "description": "MCP server for full Godot 4.x engine control with 157 tools for AI-driven game development",
+  "description": "gi-go-mcp \u2014 Gizmos Godot MCP",
   "keywords": [
     "godot",
     "mcp",
@@ -13,23 +13,24 @@
     "runtime",
     "model-context-protocol"
   ],
-  "homepage": "https://github.com/tugcantopaloglu/godot-mcp",
+  "homepage": "https://github.com/Defkil/gi-go-mcp",
   "bugs": {
-    "url": "https://github.com/tugcantopaloglu/godot-mcp/issues"
+    "url": "https://github.com/Defkil/gi-go-mcp/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/tugcantopaloglu/godot-mcp.git"
+    "url": "https://github.com/Defkil/gi-go-mcp.git"
   },
-  "mcpName": "io.github.tugcantopaloglu/godot-mcp",
+  "mcpName": "io.github.defkil/gi-go-mcp",
   "license": "MIT",
-  "author": "Tugcan Topaloglu",
+  "author": "Oliver Gr\u00fcttner",
   "contributors": [
+    "Tugcan Topaloglu",
     "Solomon Elias <solomon@sippy.ai> (https://github.com/Coding-Solo)"
   ],
   "type": "module",
   "bin": {
-    "godot-mcp": "./build/index.js"
+    "gi-go-mcp": "./build/index.js"
   },
   "files": [
     "build"
@@ -44,17 +45,15 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.26.0",
-    "axios": "^1.16.0",
-    "fs-extra": "^11.2.0"
+    "@modelcontextprotocol/sdk": "1.29.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.24",
-    "@vitest/coverage-v8": "^3.2.4",
+    "@vitest/coverage-v8": "^3.2.6",
     "typescript": "^5.3.3",
-    "vitest": "^3.0.0"
+    "vitest": "^3.2.6"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   }
 }
