@@ -48,7 +48,11 @@ import {
   secureToolArguments,
 } from './security/path-policy.js';
 import { ByteLogBuffer, ByteLogCursor } from './runtime/log-buffer.js';
-import { terminateProcess, waitForSpawn } from './runtime/process-lifecycle.js';
+import {
+  terminateProcess,
+  transitionProcessToRunning,
+  waitForSpawn,
+} from './runtime/process-lifecycle.js';
 import {
   cleanupInteractionInjection,
   prepareInteractionInjection,
@@ -3830,10 +3834,7 @@ export class GodotServer {
       });
 
       await waitForSpawn(child, 5000);
-      if (currentProcess.state === 'failed' || currentProcess.state === 'exited') {
-        throw new Error('Godot exited before startup completed.');
-      }
-      currentProcess.state = 'running';
+      transitionProcessToRunning(currentProcess, this.activeProcess);
 
       // Start async TCP connection to the interaction server (fire-and-forget)
       this.connectToGame(args.projectPath, currentProcess).catch(err => {
@@ -3851,8 +3852,18 @@ export class GodotServer {
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       if (processContext) {
-        processContext.state = 'failed';
-        processContext.errors.append(`${errorMessage}\n`);
+        const stillActive = this.activeProcess === processContext;
+        const priorState = processContext.state;
+        if (!stillActive) {
+          const prefix = priorState === 'stopping' || priorState === 'exited'
+            ? 'Godot startup was cancelled'
+            : 'Godot startup failed';
+          return createErrorResponse(`${prefix}: ${errorMessage}`);
+        }
+        if (priorState !== 'failed') {
+          processContext.state = 'failed';
+          processContext.errors.append(`${errorMessage}\n`);
+        }
         this.latestProcess = processContext;
         if (processContext.process.exitCode === null) {
           try {

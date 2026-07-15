@@ -5,6 +5,23 @@ export interface SpawnEventSource {
   removeListener(event: 'error', listener: (error: Error) => void): this;
 }
 
+export interface ProcessStartupState {
+  state: string;
+}
+
+export function transitionProcessToRunning<T extends ProcessStartupState>(
+  processContext: T,
+  activeProcess: T | null
+): void {
+  if (activeProcess !== processContext) {
+    throw new Error('Godot process generation is no longer active.');
+  }
+  if (processContext.state !== 'starting') {
+    throw new Error(`Godot process is no longer starting (state: ${processContext.state}).`);
+  }
+  processContext.state = 'running';
+}
+
 export interface TerminableProcess {
   readonly exitCode: number | null;
   kill(): boolean;

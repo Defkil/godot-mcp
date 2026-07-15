@@ -1,7 +1,11 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { ByteLogBuffer, ByteLogCursor } from '../src/runtime/log-buffer.js';
-import { terminateProcess, waitForSpawn } from '../src/runtime/process-lifecycle.js';
+import {
+  terminateProcess,
+  transitionProcessToRunning,
+  waitForSpawn,
+} from '../src/runtime/process-lifecycle.js';
 
 class FakeChild extends EventEmitter {}
 
@@ -131,6 +135,27 @@ describe('waitForSpawn', () => {
     expect(child.listenerCount('spawn')).toBe(0);
     expect(child.listenerCount('error')).toBe(0);
     vi.useRealTimers();
+  });
+});
+
+describe('process startup transition', () => {
+  it('only marks the still-active starting generation as running', () => {
+    const current = { state: 'starting' };
+    transitionProcessToRunning(current, current);
+    expect(current.state).toBe('running');
+  });
+
+  it('rejects a process stopped while its spawn handshake was pending', () => {
+    const current = { state: 'stopping' };
+    expect(() => transitionProcessToRunning(current, current)).toThrow('no longer starting');
+    expect(current.state).toBe('stopping');
+  });
+
+  it('rejects a superseded process generation', () => {
+    const current = { state: 'starting' };
+    const replacement = { state: 'starting' };
+    expect(() => transitionProcessToRunning(current, replacement)).toThrow('no longer active');
+    expect(current.state).toBe('starting');
   });
 });
 
