@@ -988,15 +988,14 @@ func get_uid(params):
 func resave_resources(params):
     print("Resaving all resources to update UID references...")
     
-    # Get project path if provided
-    var project_path = "res://"
-    if params.has("project_path"):
-        project_path = params.project_path
-        if not project_path.begins_with("res://"):
-            project_path = "res://" + project_path
-        if not project_path.ends_with("/"):
-            project_path += "/"
-    
+    # This operation always runs inside the project selected by Godot's --path.
+    # Host filesystem paths are not valid resource roots.
+    var project_path = params.get("project_path", "res://")
+    if project_path != "res://":
+        printerr("resave_resources only accepts the Godot resource root res://")
+        quit(1)
+        return
+
     if debug_mode:
         print("Using project path: " + project_path)
     
@@ -1010,6 +1009,7 @@ func resave_resources(params):
     # Resave each scene
     var success_count = 0
     var error_count = 0
+    var uid_error_count = 0
     
     for scene_path in scenes:
         if debug_mode:
@@ -1095,14 +1095,24 @@ func resave_resources(params):
                         print("UID file exists check after save: " + str(uid_check_after))
                     
                         if not uid_check_after:
+                            uid_error_count += 1
                             printerr("UID file reported as generated but does not exist at: " + uid_path)
                 else:
+                    uid_error_count += 1
                     printerr("Failed to generate UID for: " + script_path + ", error: " + str(error))
             else:
+                uid_error_count += 1
                 printerr("Failed to load resource: " + script_path)
         elif debug_mode:
             print("UID file already exists for: " + script_path)
     
+    var total_errors = error_count + uid_error_count
+    var summary = {
+        "eligible": scenes.size() + scripts.size(),
+        "scenesSaved": success_count,
+        "uidsGenerated": generated_uids,
+        "errors": total_errors,
+    }
     if debug_mode:
         print("Summary:")
         print("- Scenes processed: " + str(scenes.size()))
@@ -1110,7 +1120,8 @@ func resave_resources(params):
         print("- Scenes with errors: " + str(error_count))
         print("- Scripts/shaders missing UIDs: " + str(missing_uids))
         print("- UIDs successfully generated: " + str(generated_uids))
-    print("Resave operation complete")
+        print("- UID errors: " + str(uid_error_count))
+    print("GODOT_MCP_RESULT=" + JSON.stringify(summary))
 
 # Save changes to a scene file
 func save_scene(params):

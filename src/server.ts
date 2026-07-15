@@ -47,6 +47,7 @@ import {
   terminateProcessTree,
 } from './godot/process-lifecycle.js';
 import { installRuntimeBridge, type BridgeInstallation } from './godot/bridge-installer.js';
+import { createUidResaveParams, parseUidResaveSummary } from './godot/uid-resave.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -7030,13 +7031,14 @@ export class GodotServer {
       );
     }
 
-    if (!validatePath(args.projectPath)) {
+    if (!this.pathPolicy.allowsProject(args.projectPath)) {
       return createErrorResponse(
-        'Invalid project path'
+        `Project path is outside the configured allowed roots: ${args.projectPath}`
       );
     }
 
     try {
+      const projectPath = this.pathPolicy.assertProject(args.projectPath);
       // Ensure godotPath is set
       if (!this.godotPath) {
         await this.detectGodotPath();
@@ -7048,10 +7050,10 @@ export class GodotServer {
       }
 
       // Check if the project directory exists and contains a project.godot file
-      const projectFile = join(args.projectPath, 'project.godot');
+      const projectFile = join(projectPath, 'project.godot');
       if (!existsSync(projectFile)) {
         return createErrorResponse(
-          `Not a valid Godot project: ${args.projectPath}`
+          `Not a valid Godot project: ${projectPath}`
         );
       }
 
@@ -7065,17 +7067,12 @@ export class GodotServer {
         );
       }
 
-      // Prepare parameters for the operation (already in camelCase)
-      const params = {
-        projectPath: args.projectPath,
-      };
-
-      // Execute the operation
-      const { stdout, stderr } = await this.executeOperation('resave_resources', params, args.projectPath);
-
-      if (stderr && stderr.includes('Failed to')) {
+      const params = createUidResaveParams(projectPath);
+      const { stdout } = await this.executeOperation('resave_resources', params, projectPath);
+      const summary = parseUidResaveSummary(stdout);
+      if (summary.errors > 0) {
         return createErrorResponse(
-          `Failed to update project UIDs: ${stderr}`
+          `Project UID update completed with ${summary.errors} error(s). Summary: ${JSON.stringify(summary)}`
         );
       }
 
@@ -7083,7 +7080,7 @@ export class GodotServer {
         content: [
           {
             type: 'text',
-            text: `Project UIDs updated successfully.\n\nOutput: ${stdout}`,
+            text: `Project UID scan completed successfully. Eligible resources: ${summary.eligible}; scenes saved: ${summary.scenesSaved}; UIDs generated: ${summary.uidsGenerated}.`,
           },
         ],
       };
