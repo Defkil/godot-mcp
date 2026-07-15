@@ -14,6 +14,7 @@ import {
   PathPolicyError,
   isUncPath,
   parseAllowedDirectories,
+  pathPolicyFromEnvironment,
   secureToolArguments,
 } from '../src/security/path-policy.js';
 
@@ -61,6 +62,19 @@ describe('parseAllowedDirectories', () => {
 });
 
 describe('PathPolicy', () => {
+  it('fails closed when no roots or explicit unsafe override are configured', () => {
+    expect(() => pathPolicyFromEnvironment(undefined, false)).toThrowError(
+      expect.objectContaining({ code: 'INVALID_CONFIGURATION' })
+    );
+  });
+
+  it('requires an explicit override for unrestricted compatibility mode', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const policy = pathPolicyFromEnvironment(undefined, true);
+    expect(policy.isRestricted).toBe(false);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('GODOT_MCP_UNSAFE_MODE=1'));
+  });
+
   it('allows an exact configured root and its real descendants', () => {
     const root = temporaryDirectory();
     const project = path.join(root, 'project');

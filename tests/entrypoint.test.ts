@@ -35,12 +35,14 @@ vi.mock('node:child_process', () => ({
 
 describe('library entrypoint', () => {
   const originalGodotPath = process.env.GODOT_PATH;
+  const originalAllowedDirs = process.env.GODOT_MCP_ALLOWED_DIRS;
 
   beforeEach(() => {
     vi.resetModules();
     sdkMocks.connect.mockClear();
     sdkMocks.transportConstructor.mockClear();
     process.env.GODOT_PATH = process.execPath;
+    process.env.GODOT_MCP_ALLOWED_DIRS = JSON.stringify([process.cwd()]);
   });
 
   afterEach(() => {
@@ -48,6 +50,11 @@ describe('library entrypoint', () => {
       delete process.env.GODOT_PATH;
     } else {
       process.env.GODOT_PATH = originalGodotPath;
+    }
+    if (originalAllowedDirs === undefined) {
+      delete process.env.GODOT_MCP_ALLOWED_DIRS;
+    } else {
+      process.env.GODOT_MCP_ALLOWED_DIRS = originalAllowedDirs;
     }
   });
 

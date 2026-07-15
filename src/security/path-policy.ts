@@ -195,13 +195,22 @@ export function secureToolArguments(
 let permissiveWarningEmitted = false;
 
 export function pathPolicyFromEnvironment(
-  raw: string | undefined = process.env.GODOT_MCP_ALLOWED_DIRS
+  raw: string | undefined = process.env.GODOT_MCP_ALLOWED_DIRS,
+  unsafeMode: boolean = process.env.GODOT_MCP_UNSAFE_MODE === '1'
 ): PathPolicy {
-  const policy = new PathPolicy(parseAllowedDirectories(raw));
+  const roots = parseAllowedDirectories(raw);
+  if (roots.length === 0 && !unsafeMode) {
+    throw new PathPolicyError(
+      'INVALID_CONFIGURATION',
+      'GODOT_MCP_ALLOWED_DIRS must contain at least one trusted project root. Set GODOT_MCP_UNSAFE_MODE=1 only for an explicitly unrestricted local session.'
+    );
+  }
+
+  const policy = new PathPolicy(roots);
   if (!policy.isRestricted && !permissiveWarningEmitted) {
     permissiveWarningEmitted = true;
     console.error(
-      '[SECURITY] GODOT_MCP_ALLOWED_DIRS is not configured. Project roots remain permissive for compatibility.'
+      '[SECURITY] GODOT_MCP_UNSAFE_MODE=1 enabled without GODOT_MCP_ALLOWED_DIRS. All canonical project roots are permitted.'
     );
   }
   return policy;

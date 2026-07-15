@@ -2,7 +2,7 @@
 
 Gizmos Godot MCP is an MCP server that provides full Godot 4.x engine control for AI-driven game development.
 
-> **Security warning:** This server can execute code and arbitrary GDScript. Run it only with trusted projects and clients. Configure `GODOT_MCP_ALLOWED_DIRS`; without it, project-root access remains permissive for compatibility.
+> **Security warning:** This server can execute code and arbitrary GDScript. Run it only with trusted projects and clients. Startup fails unless `GODOT_MCP_ALLOWED_DIRS` contains at least one trusted root.
 
 ## Requirements
 - Node.js >= 20
@@ -21,7 +21,7 @@ npm run build
 
 ## Configuration
 
-Configure your MCP client with the local build path. Set `GODOT_PATH` if Godot is not on `PATH`. Set `GODOT_MCP_ALLOWED_DIRS` to a JSON array of trusted roots; delimited lists are also accepted (`;` or `,` on Windows, `:` or `,` on POSIX).
+Configure your MCP client with the local build path. Set `GODOT_PATH` if Godot is not on `PATH`. `GODOT_MCP_ALLOWED_DIRS` is required and accepts a JSON array of trusted roots; delimited lists are also accepted (`;` or `,` on Windows, `:` or `,` on POSIX).
 
 ```json
 {
@@ -39,6 +39,8 @@ Configure your MCP client with the local build path. Set `GODOT_PATH` if Godot i
 ```
 
 Configured roots are enforced after native path canonicalization, including symlink and Windows-junction resolution, for project roots and project discovery. This is not yet a complete filesystem sandbox: inner resource parameters passed to Godot and path time-of-check/time-of-use races remain residual risks.
+
+For an explicitly unrestricted local compatibility session, set `GODOT_MCP_UNSAFE_MODE=1`. This override is intentionally noisy and is not recommended for normal use.
 
 ## Capability Domains
 - **Editor Control**: Launch Godot, fetch project structure, and manage scenes.
