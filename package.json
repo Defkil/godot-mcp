@@ -29,7 +29,12 @@
   ],
   "type": "module",
   "bin": {
-    "godot-mcp": "./build/index.js"
+    "godot-mcp": "./build/bin.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./build/index.js"
+    }
   },
   "files": [
     "build"
@@ -49,7 +54,7 @@
     "fs-extra": "^11.2.0"
   },
   "devDependencies": {
-    "@types/node": "^20.11.24",
+    "@types/node": "^20.19.43",
     "@vitest/coverage-v8": "^3.2.4",
     "typescript": "^5.3.3",
     "vitest": "^3.0.0"

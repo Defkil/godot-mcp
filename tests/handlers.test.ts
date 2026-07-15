@@ -26,7 +26,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 let sourceCode: string;
 
 beforeAll(() => {
-  sourceCode = readFileSync(join(__dirname, '..', 'src', 'index.ts'), 'utf8');
+  sourceCode = readFileSync(join(__dirname, '..', 'src', 'server.ts'), 'utf8');
 });
 
 // ---------------------------------------------------------------------------
