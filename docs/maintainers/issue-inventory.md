@@ -3,10 +3,7 @@
 Status date: 2026-07-15
 
 This inventory is the local source of truth for the takeover of `Defkil/godot-mcp`.
-It covers every issue currently open in the original repository and every issue
-reported against the immediate upstream. An upstream issue being closed is not
-accepted as proof by itself: inherited fixes receive regression coverage here.
-No issue state in a public repository is changed by this work.
+It covers all 70 issues inventoried across both predecessor repositories (9 immediate-upstream and 61 original-source issues), including closed reports whose fixes may not be ancestors of this fork. An upstream issue being closed is not accepted as proof by itself: inherited fixes receive regression coverage here. The corresponding audit also reviewed 69 pull requests (11 immediate-upstream and 58 original-source). No issue state in a public repository is changed by this work.
 
 Repositories:
 
@@ -37,49 +34,61 @@ inherited behavior is verified against fixtures and a real Godot project.
 | [tugcantopaloglu#14](https://github.com/tugcantopaloglu/godot-mcp/issues/14) `game_wait` cannot wait for physics ticks | closed | open | Render and physics frame modes verified in a running project |
 | [tugcantopaloglu#16](https://github.com/tugcantopaloglu/godot-mcp/issues/16) bridge script copied over user-managed setup | closed | partial | Preserve pre-existing script/autoload byte-for-byte and remove only files created by the server |
 
-## Original-source open issues
+## Original-source active issues and inherited critical fixes
 
-The original repository currently has 23 open issues. Several were implemented in
-the immediate fork but never closed in the original tracker.
+The original repository had 61 issues in the verified historical inventory, including 23 open reports. Several closed fixes were implemented after the histories diverged and therefore still require explicit adoption here.
 
 | Issue | Local disposition | Takeover decision |
 |---|---|---|
+| [Coding-Solo#95](https://github.com/Coding-Solo/godot-mcp/issues/95) arbitrary GDScript instantiation through node class parameters | partial | Two-layer fix adopted from PR #99: TypeScript accepts identifiers only and GDScript loads custom classes only from the global class registry. Unit/handler regressions pass; real Godot fixture remains required. |
 | [Coding-Solo#120](https://github.com/Coding-Solo/godot-mcp/issues/120) list project files | partial | Existing `list_project_files` must gain deterministic filtering, bounded output and path-policy coverage. |
 | [Coding-Solo#118](https://github.com/Coding-Solo/godot-mcp/issues/118) vulnerable axios/MCP SDK | verified | Current lockfile reports `npm audit` zero; keep Dependabot and scheduled audit gates. |
 | [Coding-Solo#114](https://github.com/Coding-Solo/godot-mcp/issues/114) attach C# script | open | Add typed C# attachment in .NET projects and reject incompatible targets. |
 | [Coding-Solo#111](https://github.com/Coding-Solo/godot-mcp/issues/111) Godot 4.7 support | partial | Wargrid already runs on Godot 4.7; add 4.4–4.7 compatibility fixtures and CI matrix documentation. |
-| [Coding-Solo#106](https://github.com/Coding-Solo/godot-mcp/issues/106) return launch errors to the agent | open | Introduce startup observation, structured diagnostics and retained terminal state. |
+| [Coding-Solo#106](https://github.com/Coding-Solo/godot-mcp/issues/106) return launch errors to the agent | partial | Runtime launch now waits for readiness and retains structured startup/exit diagnostics; editor-launch observation and real Godot regression remain. |
 | [Coding-Solo#103](https://github.com/Coding-Solo/godot-mcp/issues/103) document texture import prerequisite | open | Detect import state where possible and document/actionably report the prerequisite. |
-| [Coding-Solo#102](https://github.com/Coding-Solo/godot-mcp/issues/102) malformed UID resave root and false success | open | Pass `res://`, fail when zero eligible resources are unexpectedly processed, and add a Godot fixture regression. |
+| [Coding-Solo#102](https://github.com/Coding-Solo/godot-mcp/issues/102) malformed UID resave root and false success | partial | The operation now passes `res://` and requires a typed Godot-side result summary; a real Godot fixture regression remains. |
 | [Coding-Solo#98](https://github.com/Coding-Solo/godot-mcp/issues/98) ClassDB access | open | Add bounded read-only class/method/property documentation tools. |
 | [Coding-Solo#97](https://github.com/Coding-Solo/godot-mcp/issues/97) policy enforcement | partial | Canonical roots started in `PathPolicy`; add capability profiles, rate/size limits and explicit unsafe-tool opt-in. |
 | [Coding-Solo#88](https://github.com/Coding-Solo/godot-mcp/issues/88) visual debugging/playtest capture | partial | Screenshot exists; add deterministic capture readiness and optional bounded frame sequence, not unrestricted recording. |
 | [Coding-Solo#84](https://github.com/Coding-Solo/godot-mcp/issues/84) bridge stuck connecting | open | Replace fixed-port/fire-and-forget startup with configurable authenticated readiness and actionable status. |
-| [Coding-Solo#70](https://github.com/Coding-Solo/godot-mcp/issues/70) `run_project` restart race | open | Await process-tree termination and bridge release before the next launch. |
+| [Coding-Solo#70](https://github.com/Coding-Solo/godot-mcp/issues/70) `run_project` restart race | partial | Process-tree termination is awaited and session-bound cleanup is idempotent; real restart/port-release verification remains. |
 | [Coding-Solo#68](https://github.com/Coding-Solo/godot-mcp/issues/68) keyboard/mouse input | partial | Input tools exist; verify sandboxed delivery and held-input cleanup on stop/disconnect. |
 | [Coding-Solo#61](https://github.com/Coding-Solo/godot-mcp/issues/61) publish npm package | delivery | Prepare provenance-backed npm/GitHub release workflows; publication remains blocked on Oliver's approval. |
 | [Coding-Solo#57](https://github.com/Coding-Solo/godot-mcp/issues/57) attach scripts/runtime tree/main scene | partial | Existing tools cover these operations; add typed round-trip and runtime tests. |
 | [Coding-Solo#49](https://github.com/Coding-Solo/godot-mcp/issues/49) Windows JSON quoting | partial | `execFile` argument passing exists; add native Windows regression with spaces and Unicode paths. |
 | [Coding-Solo#39](https://github.com/Coding-Solo/godot-mcp/issues/39) connect exported nodes | partial | Scene signals are supported; document and test exported-resource/node assignment workflows. |
-| [Coding-Solo#37](https://github.com/Coding-Solo/godot-mcp/issues/37) false `No active Godot process` | open | Replace child-handle-only state with an explicit lifecycle state machine and retained exit diagnostics. |
+| [Coding-Solo#37](https://github.com/Coding-Solo/godot-mcp/issues/37) false `No active Godot process` | partial | Explicit runtime states and retained post-exit diagnostics are implemented; real process-exit regression remains. |
 | [Coding-Solo#30](https://github.com/Coding-Solo/godot-mcp/issues/30) old MCP SDK/dependencies | verified | MCP SDK and dependencies are current enough for audit zero; compatibility smoke remains a release gate. |
 | [Coding-Solo#29](https://github.com/Coding-Solo/godot-mcp/issues/29) GUT integration | open | Add a generic headless Godot test runner with a GUT adapter and structured results. |
 | [Coding-Solo#23](https://github.com/Coding-Solo/godot-mcp/issues/23) editor launch reports false success | open | Validate executable files, observe startup and return launch diagnostics instead of optimistic success. |
 | [Coding-Solo#22](https://github.com/Coding-Solo/godot-mcp/issues/22) Dockerfile/Glama listing | delivery | Do not claim an inherited listing. Evaluate a documented container image only for headless operations; GUI/runtime control remains local. |
 | [Coding-Solo#20](https://github.com/Coding-Solo/godot-mcp/issues/20) scene creation JSON parsing | partial | Structured argv avoids shell quoting; verify Windows path/JSON fixtures and real scene creation. |
 
+## Historical original-source dispositions
+
+The following closed original-source reports complete the 61-issue inventory without pretending that tracker closure alone is proof:
+
+- `partial` or covered by an active row above: [#112](https://github.com/Coding-Solo/godot-mcp/issues/112), [#101](https://github.com/Coding-Solo/godot-mcp/issues/101), [#54](https://github.com/Coding-Solo/godot-mcp/issues/54), [#31](https://github.com/Coding-Solo/godot-mcp/issues/31). These map respectively to policy/injection, C# attachment, real-version E2E coverage and runtime/scene inspection work.
+- `verified in source; retain regression gates`: [#120](https://github.com/Coding-Solo/godot-mcp/issues/120), [#118](https://github.com/Coding-Solo/godot-mcp/issues/118), [#81](https://github.com/Coding-Solo/godot-mcp/issues/81), [#68](https://github.com/Coding-Solo/godot-mcp/issues/68), [#64](https://github.com/Coding-Solo/godot-mcp/issues/64), [#57](https://github.com/Coding-Solo/godot-mcp/issues/57), [#55](https://github.com/Coding-Solo/godot-mcp/issues/55), [#49](https://github.com/Coding-Solo/godot-mcp/issues/49), [#46](https://github.com/Coding-Solo/godot-mcp/issues/46), [#44](https://github.com/Coding-Solo/godot-mcp/issues/44), [#40](https://github.com/Coding-Solo/godot-mcp/issues/40), [#33](https://github.com/Coding-Solo/godot-mcp/issues/33), [#24](https://github.com/Coding-Solo/godot-mcp/issues/24), [#15](https://github.com/Coding-Solo/godot-mcp/issues/15), [#14](https://github.com/Coding-Solo/godot-mcp/issues/14), [#13](https://github.com/Coding-Solo/godot-mcp/issues/13), [#9](https://github.com/Coding-Solo/godot-mcp/issues/9), [#8](https://github.com/Coding-Solo/godot-mcp/issues/8), [#5](https://github.com/Coding-Solo/godot-mcp/issues/5), [#3](https://github.com/Coding-Solo/godot-mcp/issues/3), [#1](https://github.com/Coding-Solo/godot-mcp/issues/1).
+- `feature/delivery`: [#77](https://github.com/Coding-Solo/godot-mcp/issues/77), [#76](https://github.com/Coding-Solo/godot-mcp/issues/76), [#73](https://github.com/Coding-Solo/godot-mcp/issues/73), [#71](https://github.com/Coding-Solo/godot-mcp/issues/71). These remain candidates for bounded instructions, tooling and documentation rather than release-blocking inherited defects.
+- `out-of-core, external or obsolete`: [#119](https://github.com/Coding-Solo/godot-mcp/issues/119), [#117](https://github.com/Coding-Solo/godot-mcp/issues/117), [#116](https://github.com/Coding-Solo/godot-mcp/issues/116), [#90](https://github.com/Coding-Solo/godot-mcp/issues/90), [#86](https://github.com/Coding-Solo/godot-mcp/issues/86), [#85](https://github.com/Coding-Solo/godot-mcp/issues/85), [#43](https://github.com/Coding-Solo/godot-mcp/issues/43), [#36](https://github.com/Coding-Solo/godot-mcp/issues/36), [#28](https://github.com/Coding-Solo/godot-mcp/issues/28), [#21](https://github.com/Coding-Solo/godot-mcp/issues/21), [#17](https://github.com/Coding-Solo/godot-mcp/issues/17), [#16](https://github.com/Coding-Solo/godot-mcp/issues/16), [#7](https://github.com/Coding-Solo/godot-mcp/issues/7).
+
+The two immediate-upstream issues omitted from the focused regression table are [#1](https://github.com/tugcantopaloglu/godot-mcp/issues/1) (test coverage, still partial until Godot E2E exists) and [#4](https://github.com/tugcantopaloglu/godot-mcp/issues/4) (strict-type warnings, implemented in the inherited source).
+
 ## Additional defects found during takeover
 
-1. `src/index.ts` was a 7,115-line executable monolith and could not be imported as a library without starting the server.
-2. `mcp_interaction_server.gd` is a 4,861-line single-client server on fixed port `9090` with no authentication token.
-3. `godot_operations.gd` is a 1,887-line dispatcher and reports success based on stderr text heuristics rather than a typed protocol.
-4. Most handler tests inspect source strings and regular expressions; they do not execute handlers or Godot.
-5. Many filesystem handlers use a lexical `validatePath` check and `join`, bypassing the allowed-root policy and symlink boundaries.
-6. Runtime output arrays are unbounded, launch returns before readiness, and exit clears access to diagnostics.
-7. Process termination is not awaited and may leave a process tree or occupied bridge port.
-8. Bridge installation rewrites `project.godot` and later heuristically removes text rather than restoring an exact transaction snapshot.
-9. `update_project_uids` passes a host path into a Godot resource-root parameter and can report a false positive.
-10. The package had one executable/library entrypoint; the takeover branch now separates them while preserving legacy `build/index.js` execution.
+1. Agent-controlled `rootNodeType`/`nodeType` values could previously load arbitrary raw GDScript paths and execute `script.new()`; the takeover adopts the two-layer identifier/global-class-registry fix from original-source PR #99.
+2. `src/index.ts` was a 7,115-line executable monolith and could not be imported as a library without starting the server.
+3. `mcp_interaction_server.gd` is a 4,861-line single-client server on fixed port `9090` with no authentication token; any local process could displace the MCP client and reach `game_eval`.
+4. `godot_operations.gd` is a 1,887-line dispatcher and reports success based on stderr text heuristics rather than a typed protocol.
+5. Most handler tests inspect source strings and regular expressions; they do not execute handlers or Godot.
+6. Many filesystem handlers use a lexical `validatePath` check and `join`, bypassing the allowed-root policy and symlink boundaries.
+7. Runtime output arrays were unbounded and exit cleared diagnostics; takeover lifecycle tests now cover bounded buffers and retained terminal state.
+8. Process termination was not awaited; the takeover now waits for graceful termination and escalates to process-tree termination with platform-specific tests.
+9. Bridge installation heuristically rewrote `project.godot`; the takeover now restores byte-exact snapshots and preserves colliding/user-managed files.
+10. `update_project_uids` passed a host path as a resource root; the takeover now passes `res://` and requires a typed result marker, pending real-Godot verification.
+11. The package had one executable/library entrypoint; the takeover branch now separates them while preserving legacy `build/index.js` execution.
 
 ## Publication boundary
 

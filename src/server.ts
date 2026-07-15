@@ -40,6 +40,7 @@ import {
   type OperationParams,
 } from './utils.js';
 import { PathPolicy, createPathPolicyFromEnvironment } from './security/path-policy.js';
+import { isSafeGodotClassName } from './security/godot-class-name.js';
 import {
   BoundedLineBuffer,
   LaunchError,
@@ -4169,15 +4170,22 @@ export class GodotServer {
       );
     }
 
-    if (!validatePath(args.projectPath) || !validatePath(args.scenePath)) {
+    const rootNodeType = args.rootNodeType || 'Node2D';
+    if (!isSafeGodotClassName(rootNodeType)) {
       return createErrorResponse(
-        'Invalid path'
+        'Invalid rootNodeType: expected a built-in or registered Godot class identifier, not a path.'
       );
     }
 
+    if (!this.pathPolicy.allowsProject(args.projectPath)) {
+      return createErrorResponse('Project path is outside the configured allowed roots.');
+    }
+
     try {
+      const projectPath = this.pathPolicy.assertProject(args.projectPath);
+      this.pathPolicy.resolveProjectMember(projectPath, args.scenePath);
       // Check if the project directory exists and contains a project.godot file
-      const projectFile = join(args.projectPath, 'project.godot');
+      const projectFile = join(projectPath, 'project.godot');
       if (!existsSync(projectFile)) {
         return createErrorResponse(
           `Not a valid Godot project: ${args.projectPath}`
@@ -4187,11 +4195,11 @@ export class GodotServer {
       // Prepare parameters for the operation (already in camelCase)
       const params = {
         scenePath: args.scenePath,
-        rootNodeType: args.rootNodeType || 'Node2D',
+        rootNodeType,
       };
 
       // Execute the operation
-      const { stdout, stderr } = await this.executeOperation('create_scene', params, args.projectPath);
+      const { stdout, stderr } = await this.executeOperation('create_scene', params, projectPath);
 
       if (stderr && stderr.includes('Failed to')) {
         return createErrorResponse(
@@ -4227,15 +4235,21 @@ export class GodotServer {
       );
     }
 
-    if (!validatePath(args.projectPath) || !validatePath(args.scenePath)) {
+    if (!isSafeGodotClassName(args.nodeType)) {
       return createErrorResponse(
-        'Invalid path'
+        'Invalid nodeType: expected a built-in or registered Godot class identifier, not a path.'
       );
     }
 
+    if (!this.pathPolicy.allowsProject(args.projectPath)) {
+      return createErrorResponse('Project path is outside the configured allowed roots.');
+    }
+
     try {
+      const projectPath = this.pathPolicy.assertProject(args.projectPath);
+      const scenePath = this.pathPolicy.resolveProjectMember(projectPath, args.scenePath);
       // Check if the project directory exists and contains a project.godot file
-      const projectFile = join(args.projectPath, 'project.godot');
+      const projectFile = join(projectPath, 'project.godot');
       if (!existsSync(projectFile)) {
         return createErrorResponse(
           `Not a valid Godot project: ${args.projectPath}`
@@ -4243,7 +4257,6 @@ export class GodotServer {
       }
 
       // Check if the scene file exists
-      const scenePath = join(args.projectPath, args.scenePath);
       if (!existsSync(scenePath)) {
         return createErrorResponse(
           `Scene file does not exist: ${args.scenePath}`
@@ -4267,7 +4280,7 @@ export class GodotServer {
       }
 
       // Execute the operation
-      const { stdout, stderr } = await this.executeOperation('add_node', params, args.projectPath);
+      const { stdout, stderr } = await this.executeOperation('add_node', params, projectPath);
 
       if (stderr && stderr.includes('Failed to')) {
         return createErrorResponse(
