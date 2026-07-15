@@ -6,6 +6,7 @@ import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import { GodotServer } from '../src/server.js';
+import { PathPolicy } from '../src/security/path-policy.js';
 
 class FakeChildProcess extends EventEmitter {
   stdout = new PassThrough();
@@ -43,9 +44,14 @@ function createProject(): { path: string; original: string } {
   return { path, original };
 }
 
-function createServer(child: FakeChildProcess, connector: () => Promise<void> = async () => {}) {
+function createServer(
+  child: FakeChildProcess,
+  projectPath: string,
+  connector: () => Promise<void> = async () => {},
+) {
   return new GodotServer({
     godotPath: process.execPath,
+    pathPolicy: new PathPolicy([projectPath]),
     registerSignalHandlers: false,
     runtimeConnector: connector,
     spawnProcess: () => child.asChildProcess(),
@@ -56,7 +62,7 @@ describe('GodotServer process lifecycle', () => {
   it('waits for readiness, retains bounded diagnostics, and stops cleanly', async () => {
     const project = createProject();
     const child = new FakeChildProcess();
-    const server = createServer(child);
+    const server = createServer(child, project.path);
 
     const started = await (server as any).handleRunProject({ projectPath: project.path });
     expect(started.isError).not.toBe(true);
@@ -86,7 +92,7 @@ describe('GodotServer process lifecycle', () => {
     const readiness = new Promise<void>(resolve => {
       releaseReadiness = resolve;
     });
-    const server = createServer(child, () => readiness);
+    const server = createServer(child, project.path, () => readiness);
 
     queueMicrotask(() => child.stderr.write('ERROR: Parse Error: broken Main.tscn\n'));
     const result = await (server as any).handleRunProject({ projectPath: project.path });

@@ -557,7 +557,7 @@ The server listens on `127.0.0.1:9090` and accepts JSON commands over TCP when t
 |----------|-------------|
 | `GODOT_PATH` | Path to the Godot executable (overrides auto-detection) |
 | `DEBUG` | Set to `"true"` for detailed server-side logging |
-| `GODOT_MCP_ALLOWED_DIRS` | Optional. Restrict `run_project` to projects under these roots (`;`, `,`, or `:` separated). When unset, any project path is allowed. |
+| `GODOT_MCP_ALLOWED_DIRS` | Allowed project roots (`;` or `,` separated on Windows; `:` or `,` on POSIX). The policy applies to every tool carrying a `projectPath` and to project-member file arguments. When unset, access is restricted to the MCP server's current working directory. |
 
 ## Architecture
 

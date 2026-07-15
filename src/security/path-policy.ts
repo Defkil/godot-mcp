@@ -3,7 +3,7 @@ import { posix, win32 } from 'node:path';
 
 export type SupportedPlatform = 'win32' | 'linux' | 'darwin';
 
-interface PathPolicyOptions {
+export interface PathPolicyOptions {
   platform?: SupportedPlatform;
   exists?: (value: string) => boolean;
   canonicalize?: (value: string) => string;
@@ -126,6 +126,14 @@ export class PathPolicy {
   }
 }
 
-export function createPathPolicyFromEnvironment(env: NodeJS.ProcessEnv = process.env): PathPolicy {
-  return new PathPolicy(parseAllowedRoots(env.GODOT_MCP_ALLOWED_DIRS ?? ''));
+export function createPathPolicyFromEnvironment(
+  env: NodeJS.ProcessEnv = process.env,
+  defaultRoot: string = process.cwd(),
+  options: PathPolicyOptions = {},
+): PathPolicy {
+  const configuredRoots = parseAllowedRoots(
+    env.GODOT_MCP_ALLOWED_DIRS ?? '',
+    options.platform ?? (process.platform as SupportedPlatform),
+  );
+  return new PathPolicy(configuredRoots.length > 0 ? configuredRoots : [defaultRoot], options);
 }

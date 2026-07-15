@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PathPolicy, parseAllowedRoots } from '../src/security/path-policy.js';
+import { PathPolicy, createPathPolicyFromEnvironment, parseAllowedRoots } from '../src/security/path-policy.js';
 
 const windowsCanonical = (value: string) => value.replace(/\//g, '\\');
 const posixCanonical = (value: string) => value;
@@ -80,6 +80,17 @@ describe('PathPolicy', () => {
     expect(() => policy.resolveProjectMember('/workspace/game', '../secret.txt')).toThrow();
     expect(() => policy.resolveProjectMember('/workspace/game', '/etc/passwd')).toThrow();
     expect(() => policy.resolveProjectMember('/workspace/game', 'file:///etc/passwd')).toThrow();
+  });
+
+  it('defaults to the process working directory instead of unrestricted access', () => {
+    const policy = createPathPolicyFromEnvironment({}, '/workspace/default', {
+      platform: 'linux',
+      exists: () => true,
+      canonicalize: posixCanonical,
+    });
+
+    expect(policy.allowsProject('/workspace/default/game')).toBe(true);
+    expect(policy.allowsProject('/workspace/other')).toBe(false);
   });
 
   it('canonicalizes through the nearest existing parent for future files', () => {

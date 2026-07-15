@@ -41,6 +41,7 @@ import {
 } from './utils.js';
 import { PathPolicy, createPathPolicyFromEnvironment } from './security/path-policy.js';
 import { isSafeGodotClassName } from './security/godot-class-name.js';
+import { assertSafeToolPaths } from './security/tool-path-guard.js';
 import {
   BoundedLineBuffer,
   LaunchError,
@@ -3343,6 +3344,15 @@ export class GodotServer {
     // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       this.logDebug(`Handling tool request: ${request.params.name}`);
+      try {
+        assertSafeToolPaths(
+          this.pathPolicy,
+          request.params.arguments as Record<string, unknown> | undefined,
+        );
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Invalid tool path arguments.';
+        return createErrorResponse(`Path policy rejected ${request.params.name}: ${message}`);
+      }
       switch (request.params.name) {
         case 'launch_editor':
           return await this.handleLaunchEditor(request.params.arguments);
