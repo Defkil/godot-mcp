@@ -51,7 +51,7 @@ The original repository had 61 issues in the verified historical inventory, incl
 | [Coding-Solo#98](https://github.com/Coding-Solo/godot-mcp/issues/98) ClassDB access | open | Add bounded read-only class/method/property documentation tools. |
 | [Coding-Solo#97](https://github.com/Coding-Solo/godot-mcp/issues/97) policy enforcement | partial | Canonical roots started in `PathPolicy`; add capability profiles, rate/size limits and explicit unsafe-tool opt-in. |
 | [Coding-Solo#88](https://github.com/Coding-Solo/godot-mcp/issues/88) visual debugging/playtest capture | partial | Screenshot exists; add deterministic capture readiness and optional bounded frame sequence, not unrestricted recording. |
-| [Coding-Solo#84](https://github.com/Coding-Solo/godot-mcp/issues/84) bridge stuck connecting | open | Replace fixed-port/fire-and-forget startup with configurable authenticated readiness and actionable status. |
+| [Coding-Solo#84](https://github.com/Coding-Solo/godot-mcp/issues/84) bridge stuck connecting | partial | Fixed-port/fire-and-forget startup is replaced by an ephemeral authenticated readiness handshake with actionable failure; real Godot reconnect verification remains. |
 | [Coding-Solo#70](https://github.com/Coding-Solo/godot-mcp/issues/70) `run_project` restart race | partial | Process-tree termination is awaited and session-bound cleanup is idempotent; real restart/port-release verification remains. |
 | [Coding-Solo#68](https://github.com/Coding-Solo/godot-mcp/issues/68) keyboard/mouse input | partial | Input tools exist; verify sandboxed delivery and held-input cleanup on stop/disconnect. |
 | [Coding-Solo#61](https://github.com/Coding-Solo/godot-mcp/issues/61) publish npm package | delivery | Prepare provenance-backed npm/GitHub release workflows; publication remains blocked on Oliver's approval. |
@@ -80,10 +80,10 @@ The two immediate-upstream issues omitted from the focused regression table are 
 
 1. Agent-controlled `rootNodeType`/`nodeType` values could previously load arbitrary raw GDScript paths and execute `script.new()`; the takeover adopts the two-layer identifier/global-class-registry fix from original-source PR #99.
 2. `src/index.ts` was a 7,115-line executable monolith and could not be imported as a library without starting the server.
-3. `mcp_interaction_server.gd` is a 4,861-line single-client server on fixed port `9090` with no authentication token; any local process could displace the MCP client and reach `game_eval`.
+3. `mcp_interaction_server.gd` was a single-client server on fixed port `9090` with no authentication token; the takeover now uses an ephemeral loopback port, a per-session token, a versioned handshake, connection ownership and frame bounds.
 4. `godot_operations.gd` is a 1,887-line dispatcher and reports success based on stderr text heuristics rather than a typed protocol.
 5. Most handler tests inspect source strings and regular expressions; they do not execute handlers or Godot.
-6. Many filesystem handlers use a lexical `validatePath` check and `join`, bypassing the allowed-root policy and symlink boundaries.
+6. Many filesystem handlers used lexical `validatePath` plus `join`; a centralized request-boundary guard now applies canonical project roots and member resolution to every project-bearing tool, while handler-by-handler cleanup remains ongoing.
 7. Runtime output arrays were unbounded and exit cleared diagnostics; takeover lifecycle tests now cover bounded buffers and retained terminal state.
 8. Process termination was not awaited; the takeover now waits for graceful termination and escalates to process-tree termination with platform-specific tests.
 9. Bridge installation heuristically rewrote `project.godot`; the takeover now restores byte-exact snapshots and preserves colliding/user-managed files.

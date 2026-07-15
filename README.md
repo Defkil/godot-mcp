@@ -543,13 +543,9 @@ Create `.cursor/mcp.json` in your project:
 
 ## Runtime Tools Setup
 
-To use the `game_*` runtime tools, your Godot project needs the MCP interaction server autoload. Copy `build/scripts/mcp_interaction_server.gd` to your project and register it as an autoload:
+`run_project` installs the runtime bridge as a reversible transaction, starts Godot with per-session credentials, waits for an authenticated readiness handshake, and restores the original project bytes when the process stops. Existing user-managed `McpInteractionServer` autoloads are preserved, but they must use the bridge script shipped with the same server version.
 
-1. Copy `build/scripts/mcp_interaction_server.gd` to your project's scripts folder
-2. In Godot: **Project > Project Settings > Autoload**
-3. Add the script with the name `McpInteractionServer`
-
-The server listens on `127.0.0.1:9090` and accepts JSON commands over TCP when the game is running.
+The bridge binds only to `127.0.0.1` on an ephemeral per-run port. It refuses to start without a high-entropy session token, authenticates before accepting commands, rejects additional clients, and enforces request/response buffer limits. Port and token are passed only to the child process environment; they are not returned through MCP responses.
 
 ## Environment Variables
 
@@ -565,7 +561,7 @@ The server uses two communication channels:
 
 1. **Headless CLI** - For operations that don't need a running game (scene reading, modification, resource creation). Runs Godot with `--headless --script godot_operations.gd <operation> <json_params>`.
 
-2. **TCP Socket** - For runtime interaction with a running game. The `mcp_interaction_server.gd` autoload listens on port 9090 and processes JSON commands sent by the TypeScript MCP server.
+2. **Authenticated loopback socket** - For runtime interaction with a running game. Each `run_project` session allocates an ephemeral port and token; the Godot autoload accepts commands only after the versioned authentication handshake.
 
 ### Source layout
 

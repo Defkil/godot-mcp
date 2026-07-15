@@ -10,7 +10,12 @@ var _buffer: String = ""
 var _busy: bool = false
 var _busy_since: float = 0.0
 var _current_id: Variant = null
-const PORT: int = 9090
+var _port: int = 0
+var _auth_token: String = ""
+var _client_authenticated: bool = false
+const PROTOCOL_VERSION: int = 1
+const MAX_REQUEST_BUFFER_CHARS: int = 1048576
+const MAX_REQUEST_LINE_CHARS: int = 262144
 const BUSY_TIMEOUT: float = 120.0
 var _key_map: Dictionary
 var _held_keys: Dictionary = {}
@@ -19,12 +24,24 @@ func _ready() -> void:
 	# Ensure MCP server keeps processing even when game is paused
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_init_key_map()
-	_server = TCPServer.new()
-	var err: int = _server.listen(PORT, "127.0.0.1")
-	if err != OK:
-		push_error("McpInteractionServer: Failed to listen on port %d, error: %d" % [PORT, err])
+	_auth_token = OS.get_environment("GODOT_MCP_TOKEN")
+	var port_value: String = OS.get_environment("GODOT_MCP_PORT")
+	if _auth_token.length() < 32:
+		push_error("McpInteractionServer: Missing or invalid session token")
 		return
-	print("McpInteractionServer: Listening on 127.0.0.1:%d" % PORT)
+	if not port_value.is_valid_int():
+		push_error("McpInteractionServer: Missing or invalid loopback port")
+		return
+	_port = port_value.to_int()
+	if _port < 1 or _port > 65535:
+		push_error("McpInteractionServer: Loopback port is outside the valid range")
+		return
+	_server = TCPServer.new()
+	var err: int = _server.listen(_port, "127.0.0.1")
+	if err != OK:
+		push_error("McpInteractionServer: Failed to listen on port %d, error: %d" % [_port, err])
+		return
+	print("McpInteractionServer: Listening on authenticated loopback session at 127.0.0.1:%d" % _port)
 
 
 func _process(_delta: float) -> void:
@@ -40,15 +57,23 @@ func _process(_delta: float) -> void:
 			_busy_since = 0.0
 			_current_id = null
 
-	# Accept new connections
+	# Accept one connection at a time. An unauthenticated local process must not
+	# displace an already authenticated MCP session.
 	if _server.is_connection_available():
 		var new_client: StreamPeerTCP = _server.take_connection()
 		if new_client != null:
+			var keep_current: bool = false
 			if _client != null:
-				_client.disconnect_from_host()
-			_client = new_client
-			_buffer = ""
-			print("McpInteractionServer: Client connected")
+				_client.poll()
+				keep_current = _client.get_status() == StreamPeerTCP.STATUS_CONNECTED
+			if keep_current:
+				new_client.disconnect_from_host()
+				print("McpInteractionServer: Rejected additional client")
+			else:
+				_client = new_client
+				_client_authenticated = false
+				_buffer = ""
+				print("McpInteractionServer: Client connected; authentication required")
 
 	# Read data from client
 	if _client == null:
@@ -59,6 +84,7 @@ func _process(_delta: float) -> void:
 	if status == StreamPeerTCP.STATUS_ERROR or status == StreamPeerTCP.STATUS_NONE:
 		print("McpInteractionServer: Client disconnected")
 		_client = null
+		_client_authenticated = false
 		_buffer = ""
 		_busy = false
 		_busy_since = 0.0
@@ -74,12 +100,26 @@ func _process(_delta: float) -> void:
 		if data[0] == OK:
 			var bytes: PackedByteArray = data[1]
 			_buffer += bytes.get_string_from_utf8()
+			if _buffer.length() > MAX_REQUEST_BUFFER_CHARS:
+				_send_response_raw({"error": "Request buffer exceeded the 1 MiB limit"})
+				_client.disconnect_from_host()
+				_client = null
+				_client_authenticated = false
+				_buffer = ""
+				return
 
 			# Process complete lines (newline-delimited JSON)
 			while _buffer.find("\n") >= 0:
 				var newline_pos: int = _buffer.find("\n")
 				var line: String = _buffer.substr(0, newline_pos).strip_edges()
 				_buffer = _buffer.substr(newline_pos + 1)
+				if line.length() > MAX_REQUEST_LINE_CHARS:
+					_send_response_raw({"error": "Request line exceeded the 256 KiB limit"})
+					_client.disconnect_from_host()
+					_client = null
+					_client_authenticated = false
+					_buffer = ""
+					return
 				if line.length() > 0:
 					_handle_command(line)
 
@@ -97,6 +137,24 @@ func _handle_command(json_str: String) -> void:
 		return
 
 	var req_id: Variant = data.get("id", null)
+	var command: String = data.get("command", "")
+	var params: Dictionary = data.get("params", {})
+
+	if not _client_authenticated:
+		var supplied_token: String = str(params.get("token", ""))
+		if command != "__authenticate" or supplied_token != _auth_token:
+			_send_response_raw({"error": "Authentication required", "id": req_id})
+			if _client != null:
+				_client.disconnect_from_host()
+			_client = null
+			_buffer = ""
+			return
+		_client_authenticated = true
+		_send_response_raw({
+			"id": req_id,
+			"result": {"authenticated": true, "protocolVersion": PROTOCOL_VERSION},
+		})
+		return
 
 	if _busy:
 		_send_response_raw({"error": "Server busy processing another command. Try again.", "id": req_id})
@@ -104,9 +162,6 @@ func _handle_command(json_str: String) -> void:
 	_busy = true
 	_busy_since = Time.get_ticks_msec() / 1000.0
 	_current_id = req_id
-
-	var command: String = data.get("command", "")
-	var params: Dictionary = data.get("params", {})
 
 	match command:
 		# Async commands (use await)

@@ -16,6 +16,7 @@ class FakeChildProcess extends EventEmitter {
   signalCode: NodeJS.Signals | null = null;
   killed = false;
   pid = undefined;
+  spawnEnvironment: NodeJS.ProcessEnv | undefined;
 
   kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
     if (this.exitCode !== null || this.signalCode !== null) return false;
@@ -54,7 +55,10 @@ function createServer(
     pathPolicy: new PathPolicy([projectPath]),
     registerSignalHandlers: false,
     runtimeConnector: connector,
-    spawnProcess: () => child.asChildProcess(),
+    spawnProcess: (_command, _args, options) => {
+      child.spawnEnvironment = options.env;
+      return child.asChildProcess();
+    },
   });
 }
 
@@ -66,7 +70,11 @@ describe('GodotServer process lifecycle', () => {
 
     const started = await (server as any).handleRunProject({ projectPath: project.path });
     expect(started.isError).not.toBe(true);
-    expect(started.content[0].text).toContain('interaction bridge is ready');
+    expect(started.content[0].text).toContain('authenticated interaction bridge is ready');
+    expect(child.spawnEnvironment?.GODOT_MCP_PORT).toMatch(/^\d+$/);
+    expect(child.spawnEnvironment?.GODOT_MCP_PORT).not.toBe('9090');
+    expect(child.spawnEnvironment?.GODOT_MCP_TOKEN).toMatch(/^[a-f0-9]{64}$/);
+    expect(started.content[0].text).not.toContain(child.spawnEnvironment!.GODOT_MCP_TOKEN!);
 
     child.stdout.write('runtime ready\n');
     child.stderr.write('warning only\n');

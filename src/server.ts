@@ -11,6 +11,7 @@ import { join, dirname, basename, normalize, relative } from 'path';
 import { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync } from 'fs';
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'child_process';
 import { promisify } from 'util';
+import { env as processEnvironment } from 'node:process';
 import { createConnection, Socket } from 'net';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -50,6 +51,7 @@ import {
 } from './godot/process-lifecycle.js';
 import { installRuntimeBridge, type BridgeInstallation } from './godot/bridge-installer.js';
 import { createUidResaveParams, parseUidResaveSummary } from './godot/uid-resave.js';
+import { allocateRuntimeCredentials, runtimeEnvironment } from './godot/runtime-credentials.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -87,7 +89,7 @@ interface GodotProcessDiagnostics {
 }
 
 interface SpawnProcess {
-  (command: string, args: readonly string[], options: { stdio: 'pipe' }): ChildProcessWithoutNullStreams;
+  (command: string, args: readonly string[], options: { stdio: 'pipe'; env?: NodeJS.ProcessEnv }): ChildProcessWithoutNullStreams;
 }
 
 /**
@@ -101,6 +103,7 @@ export interface GodotServerConfig {
   pathPolicy?: PathPolicy;
   spawnProcess?: SpawnProcess;
   runtimeConnector?: (projectPath: string) => Promise<void>;
+  runtimeConnectInitialDelayMs?: number;
   registerSignalHandlers?: boolean;
 }
 
@@ -114,6 +117,8 @@ interface GameConnection {
   pendingRequests: Map<number, (value: any) => void>;
   projectPath: string | null;
   installation: BridgeInstallation | null;
+  port: number | null;
+  token: string | null;
 }
 
 /**
@@ -132,6 +137,7 @@ export class GodotServer {
   private readonly pathPolicy: PathPolicy;
   private readonly spawnProcess: SpawnProcess;
   private readonly runtimeConnector?: (projectPath: string) => Promise<void>;
+  private readonly runtimeConnectInitialDelayMs: number;
   private gameConnection: GameConnection = {
     socket: null,
     connected: false,
@@ -139,17 +145,19 @@ export class GodotServer {
     pendingRequests: new Map(),
     projectPath: null,
     installation: null,
+    port: null,
+    token: null,
   };
   private nextRequestId: number = 1;
   private lastErrorIndex: number = 0;
   private lastLogIndex: number = 0;
-  private readonly INTERACTION_PORT = 9090;
   private readonly AUTOLOAD_NAME = 'McpInteractionServer';
 
   constructor(config?: GodotServerConfig) {
     this.pathPolicy = config?.pathPolicy ?? createPathPolicyFromEnvironment();
     this.spawnProcess = config?.spawnProcess ?? spawn;
     this.runtimeConnector = config?.runtimeConnector;
+    this.runtimeConnectInitialDelayMs = config?.runtimeConnectInitialDelayMs ?? 2000;
 
     // Apply configuration if provided
     let debugMode = DEBUG_MODE;
@@ -426,9 +434,14 @@ export class GodotServer {
    */
   private async connectToGame(projectPath: string): Promise<void> {
     this.gameConnection.projectPath = projectPath;
+    const port = this.gameConnection.port;
+    const token = this.gameConnection.token;
+    if (!port || !token) {
+      throw new Error('Runtime credentials were not initialized before connection.');
+    }
 
     // Initial delay to let the game start up
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, this.runtimeConnectInitialDelayMs));
 
     const maxAttempts = 10;
     const retryDelay = 500;
@@ -442,16 +455,22 @@ export class GodotServer {
 
       try {
         await new Promise<void>((resolve, reject) => {
-          const socket = createConnection({ host: '127.0.0.1', port: this.INTERACTION_PORT }, () => {
+          const socket = createConnection({ host: '127.0.0.1', port }, () => {
             this.gameConnection.socket = socket;
             this.gameConnection.connected = true;
             this.gameConnection.responseBuffer = '';
             this.gameConnection.pendingRequests.clear();
             this.logDebug(`Connected to game interaction server (attempt ${attempt})`);
-            console.error(`[SERVER] Connected to game interaction server on port ${this.INTERACTION_PORT}`);
+            console.error(`[SERVER] Connected to game interaction server on port ${port}`);
 
             socket.on('data', (data: Buffer) => {
               this.gameConnection.responseBuffer += data.toString();
+              if (Buffer.byteLength(this.gameConnection.responseBuffer, 'utf8') > 1024 * 1024) {
+                this.logDebug('Game interaction response exceeded the 1 MiB buffer limit');
+                this.rejectAllPending({ error: 'Runtime response exceeded the 1 MiB buffer limit' });
+                socket.destroy();
+                return;
+              }
               // Process complete lines
               while (this.gameConnection.responseBuffer.includes('\n')) {
                 const newlinePos = this.gameConnection.responseBuffer.indexOf('\n');
@@ -487,7 +506,20 @@ export class GodotServer {
           });
         });
 
-        // Successfully connected
+        const authentication = await this.sendGameCommand(
+          '__authenticate',
+          { token },
+          2000,
+        );
+        if (
+          authentication?.error ||
+          authentication?.result?.authenticated !== true ||
+          authentication?.result?.protocolVersion !== 1
+        ) {
+          this.disconnectFromGame();
+          throw new Error(authentication?.error || 'Runtime authentication failed.');
+        }
+        this.logDebug(`Authenticated game interaction session on port ${port}`);
         return;
       } catch (err) {
         this.logDebug(`Connection attempt ${attempt}/${maxAttempts} failed, retrying in ${retryDelay}ms...`);
@@ -596,6 +628,8 @@ export class GodotServer {
         this.removeInteractionServer(record.projectPath);
         this.gameConnection.projectPath = null;
       }
+      this.gameConnection.port = null;
+      this.gameConnection.token = null;
       this.activeProcess = null;
     }
     return diagnostics;
@@ -624,6 +658,8 @@ export class GodotServer {
       this.removeInteractionServer(this.gameConnection.projectPath);
       this.gameConnection.projectPath = null;
     }
+    this.gameConnection.port = null;
+    this.gameConnection.token = null;
     await this.server.close();
   }
 
@@ -3786,11 +3822,12 @@ export class GodotServer {
     }
 
     try {
+      const projectPath = this.pathPolicy.assertProject(args.projectPath);
       // Check if the project directory exists and contains a project.godot file
-      const projectFile = join(args.projectPath, 'project.godot');
+      const projectFile = join(projectPath, 'project.godot');
       if (!existsSync(projectFile)) {
         return createErrorResponse(
-          `Not a valid Godot project: ${args.projectPath}`
+          `Not a valid Godot project: ${projectPath}`
         );
       }
 
@@ -3799,25 +3836,32 @@ export class GodotServer {
         await this.stopActiveProcess();
       }
 
-      // Inject interaction server before launching
-      this.injectInteractionServer(args.projectPath);
-      this.gameConnection.projectPath = args.projectPath;
+      const credentials = await allocateRuntimeCredentials();
+      this.gameConnection.port = credentials.port;
+      this.gameConnection.token = credentials.token;
 
-      const cmdArgs = ['-d', '--path', args.projectPath];
+      // Inject interaction server before launching
+      this.injectInteractionServer(projectPath);
+      this.gameConnection.projectPath = projectPath;
+
+      const cmdArgs = ['-d', '--path', projectPath];
       if (args.scene && validatePath(args.scene)) {
         this.logDebug(`Adding scene parameter: ${args.scene}`);
         cmdArgs.push(args.scene);
       }
 
-      this.logDebug(`Running Godot project: ${args.projectPath}`);
-      const process = this.spawnProcess(this.godotPath!, cmdArgs, { stdio: 'pipe' });
+      this.logDebug(`Running Godot project: ${projectPath}`);
+      const process = this.spawnProcess(this.godotPath!, cmdArgs, {
+        stdio: 'pipe',
+        env: runtimeEnvironment(processEnvironment, credentials),
+      });
       const output = new BoundedLineBuffer(2000);
       const errors = new BoundedLineBuffer(2000);
       const record: GodotProcess = {
         process,
         output,
         errors,
-        projectPath: args.projectPath,
+        projectPath,
         startedAt: new Date().toISOString(),
       };
 
@@ -3846,8 +3890,8 @@ export class GodotServer {
       this.lastLogIndex = 0;
 
       const readiness = this.runtimeConnector
-        ? this.runtimeConnector(args.projectPath)
-        : this.connectToGame(args.projectPath);
+        ? this.runtimeConnector(projectPath)
+        : this.connectToGame(projectPath);
       await observeStartup(process, errors, {
         graceMs: 15000,
         readiness,
@@ -3857,7 +3901,7 @@ export class GodotServer {
         content: [
           {
             type: 'text',
-            text: `Godot project started and the interaction bridge is ready on 127.0.0.1:${this.INTERACTION_PORT}.`,
+            text: `Godot project started and the authenticated interaction bridge is ready on 127.0.0.1:${credentials.port}.`,
           },
         ],
       };
@@ -3873,6 +3917,8 @@ export class GodotServer {
       } catch (cleanupFailure: unknown) {
         cleanupError = cleanupFailure instanceof Error ? cleanupFailure.message : String(cleanupFailure);
       }
+      this.gameConnection.port = null;
+      this.gameConnection.token = null;
 
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const diagnostics = error instanceof LaunchError && error.diagnostics.length > 0
