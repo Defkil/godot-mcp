@@ -218,7 +218,8 @@ Closes original #102 and immediate #8/#12/#13.
 - bounded ClassDB inspection (#98);
 - texture import diagnostics (#103);
 - visual/input/frame regressions (#68/#88 and immediate #11/#14);
-- deterministic project file listing (#120).
+- deterministic, filtered and bounded project file listing (#120; implemented with
+  behavior-level scanner coverage).
 
 ### Slice 6 — delivery
 

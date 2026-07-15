@@ -41,7 +41,7 @@ The original repository had 61 issues in the verified historical inventory, incl
 | Issue | Local disposition | Takeover decision |
 |---|---|---|
 | [Coding-Solo#95](https://github.com/Coding-Solo/godot-mcp/issues/95) arbitrary GDScript instantiation through node class parameters | partial | Two-layer fix adopted from PR #99: TypeScript accepts identifiers only and GDScript loads custom classes only from the global class registry. Unit/handler regressions pass; real Godot fixture remains required. |
-| [Coding-Solo#120](https://github.com/Coding-Solo/godot-mcp/issues/120) list project files | partial | Existing `list_project_files` must gain deterministic filtering, bounded output and path-policy coverage. |
+| [Coding-Solo#120](https://github.com/Coding-Solo/godot-mcp/issues/120) list project files | verified | `list_project_files` now uses a behavior-tested deterministic scanner with extension filtering, project-relative paths, hidden-tree exclusion, traversal/output bounds and canonical request-boundary path enforcement. |
 | [Coding-Solo#118](https://github.com/Coding-Solo/godot-mcp/issues/118) vulnerable axios/MCP SDK | verified | Current lockfile reports `npm audit` zero; keep Dependabot and scheduled audit gates. |
 | [Coding-Solo#114](https://github.com/Coding-Solo/godot-mcp/issues/114) attach C# script | open | Add typed C# attachment in .NET projects and reject incompatible targets. |
 | [Coding-Solo#111](https://github.com/Coding-Solo/godot-mcp/issues/111) Godot 4.7 support | partial | Wargrid already runs on Godot 4.7; add 4.4–4.7 compatibility fixtures and CI matrix documentation. |
@@ -83,7 +83,7 @@ The two immediate-upstream issues omitted from the focused regression table are 
 3. `mcp_interaction_server.gd` was a single-client server on fixed port `9090` with no authentication token; the takeover now uses an ephemeral loopback port, a per-session token, a versioned handshake, connection ownership and frame bounds.
 4. `godot_operations.gd` is a 1,887-line dispatcher and reports success based on stderr text heuristics rather than a typed protocol.
 5. Most handler tests inspect source strings and regular expressions; they do not execute handlers or Godot.
-6. Many filesystem handlers used lexical `validatePath` plus `join`; a centralized request-boundary guard now applies canonical project roots and member resolution to every project-bearing tool, while handler-by-handler cleanup remains ongoing.
+6. Many filesystem handlers used lexical `validatePath` plus `join`; a centralized request-boundary guard now applies canonical project roots and member resolution to every project-bearing tool. The project file scanner additionally rejects standalone subdirectory escapes and bounds traversal, entry count and encoded output while handler-by-handler cleanup remains ongoing.
 7. Runtime output arrays were unbounded and exit cleared diagnostics; takeover lifecycle tests now cover bounded buffers and retained terminal state.
 8. Process termination was not awaited; the takeover now waits for graceful termination and escalates to process-tree termination with platform-specific tests.
 9. Bridge installation heuristically rewrote `project.godot`; the takeover now restores byte-exact snapshots and preserves colliding/user-managed files.

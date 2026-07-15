@@ -52,6 +52,7 @@ import {
 import { installRuntimeBridge, type BridgeInstallation } from './godot/bridge-installer.js';
 import { createUidResaveParams, parseUidResaveSummary } from './godot/uid-resave.js';
 import { allocateRuntimeCredentials, runtimeEnvironment } from './godot/runtime-credentials.js';
+import { listProjectFiles } from './tools/project/list-project-files.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -5025,35 +5026,13 @@ export class GodotServer {
         return createErrorResponse(`Subdirectory does not exist: ${args.subdirectory}`);
       }
 
-      const files: string[] = [];
-      const extensions: string[] | undefined = args.extensions;
-
-      const scanDir = (dir: string, relativeTo: string) => {
-        const entries = readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          if (entry.name.startsWith('.')) continue;
-          const fullPath = join(dir, entry.name);
-          const relativePath = fullPath.substring(relativeTo.length + 1).replace(/\\/g, '/');
-
-          if (entry.isDirectory()) {
-            scanDir(fullPath, relativeTo);
-          } else if (entry.isFile()) {
-            if (extensions && extensions.length > 0) {
-              const ext = '.' + entry.name.split('.').pop();
-              if (extensions.includes(ext)) {
-                files.push(relativePath);
-              }
-            } else {
-              files.push(relativePath);
-            }
-          }
-        }
-      };
-
-      scanDir(baseDir, args.projectPath);
+      const result = listProjectFiles(args.projectPath, {
+        subdirectory: args.subdirectory,
+        extensions: args.extensions,
+      });
 
       return {
-        content: [{ type: 'text', text: JSON.stringify({ count: files.length, files }, null, 2) }],
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
       };
     } catch (error: any) {
       return createErrorResponse(`Failed to list project files: ${error?.message || 'Unknown error'}`);
