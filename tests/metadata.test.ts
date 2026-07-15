@@ -1,10 +1,21 @@
-import { describe, it, expect } from 'vitest';
-import { getMetadata } from '../src/metadata';
+import { describe, expect, it } from 'vitest';
+import { getMetadata, parseMetadata } from '../src/metadata.js';
 
 describe('metadata', () => {
-  it('should return name and version from package.json', () => {
+  it('returns the runtime identity from package.json', () => {
     const metadata = getMetadata();
-    expect(metadata.mcpName).toBe('io.github.defkil/gi-go-mcp');
-    expect(metadata.version).toBe('3.1.0');
+    expect(metadata).toEqual({
+      mcpName: 'io.github.defkil/gi-go-mcp',
+      version: '3.1.0',
+    });
+  });
+
+  it.each([
+    '{}',
+    '{"mcpName":"","version":"3.1.0"}',
+    '{"mcpName":"io.github.defkil/gi-go-mcp","version":""}',
+    '{"mcpName":42,"version":"3.1.0"}',
+  ])('rejects invalid package metadata instead of masking drift: %s', (content) => {
+    expect(() => parseMetadata(content)).toThrow(/valid non-empty mcpName and version/);
   });
 });

@@ -1,23 +1,33 @@
-import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { join, dirname } from 'path';
+import { readFileSync } from 'node:fs';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+export interface RuntimeMetadata {
+  mcpName: string;
+  version: string;
+}
 
-export function getMetadata() {
-  try {
-    const packageJsonPath = join(__dirname, '..', 'package.json');
-    const content = readFileSync(packageJsonPath, 'utf8');
-    const pkg = JSON.parse(content);
-    return {
-      mcpName: pkg.mcpName || pkg.name,
-      version: pkg.version
-    };
-  } catch (error) {
-    return {
-      mcpName: 'gi-go-mcp',
-      version: '3.1.0'
-    };
+export function parseMetadata(content: string): RuntimeMetadata {
+  const value: unknown = JSON.parse(content);
+  const candidate = value as Partial<RuntimeMetadata> | null;
+
+  if (
+    candidate === null ||
+    typeof candidate !== 'object' ||
+    typeof candidate.mcpName !== 'string' ||
+    candidate.mcpName.length === 0 ||
+    typeof candidate.version !== 'string' ||
+    candidate.version.length === 0
+  ) {
+    throw new Error('package.json must contain valid non-empty mcpName and version fields');
   }
+
+  return {
+    mcpName: candidate.mcpName,
+    version: candidate.version,
+  };
+}
+
+export function getMetadata(
+  packageJsonUrl: URL = new URL('../package.json', import.meta.url)
+): RuntimeMetadata {
+  return parseMetadata(readFileSync(packageJsonUrl, 'utf8'));
 }
