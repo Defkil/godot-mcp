@@ -1,9 +1,14 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { ByteLogBuffer, ByteLogCursor } from '../src/runtime/log-buffer.js';
-import { waitForSpawn } from '../src/runtime/process-lifecycle.js';
+import { terminateProcess, waitForSpawn } from '../src/runtime/process-lifecycle.js';
 
 class FakeChild extends EventEmitter {}
+
+class FakeTerminableChild extends EventEmitter {
+  exitCode: number | null = null;
+  readonly kill = vi.fn(() => true);
+}
 
 describe('ByteLogBuffer', () => {
   it('evicts the oldest bytes and bounds oversized chunks', () => {
@@ -125,6 +130,50 @@ describe('waitForSpawn', () => {
     await assertion;
     expect(child.listenerCount('spawn')).toBe(0);
     expect(child.listenerCount('error')).toBe(0);
+    vi.useRealTimers();
+  });
+});
+
+describe('terminateProcess', () => {
+  it('keeps waiting until the child confirms exit', async () => {
+    const child = new FakeTerminableChild();
+    const termination = terminateProcess(child, 1000);
+    expect(child.kill).toHaveBeenCalledOnce();
+
+    child.exitCode = 0;
+    child.emit('exit', 0);
+    await expect(termination).resolves.toBeUndefined();
+    expect(child.listenerCount('exit')).toBe(0);
+    expect(child.listenerCount('close')).toBe(0);
+  });
+
+  it('rejects when the child refuses the termination signal', async () => {
+    const child = new FakeTerminableChild();
+    child.kill.mockReturnValue(false);
+    await expect(terminateProcess(child, 1000)).rejects.toThrow('refused the termination signal');
+    expect(child.listenerCount('exit')).toBe(0);
+    expect(child.listenerCount('close')).toBe(0);
+  });
+
+  it('cleans listeners when sending the termination signal throws', async () => {
+    const child = new FakeTerminableChild();
+    child.kill.mockImplementation(() => {
+      throw new Error('kill failed');
+    });
+    await expect(terminateProcess(child, 1000)).rejects.toThrow('kill failed');
+    expect(child.listenerCount('exit')).toBe(0);
+    expect(child.listenerCount('close')).toBe(0);
+  });
+
+  it('rejects a bounded termination timeout and removes listeners', async () => {
+    vi.useFakeTimers();
+    const child = new FakeTerminableChild();
+    const termination = terminateProcess(child, 25);
+    const assertion = expect(termination).rejects.toThrow('did not exit within 25ms');
+    await vi.advanceTimersByTimeAsync(25);
+    await assertion;
+    expect(child.listenerCount('exit')).toBe(0);
+    expect(child.listenerCount('close')).toBe(0);
     vi.useRealTimers();
   });
 });

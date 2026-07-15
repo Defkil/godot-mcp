@@ -9,7 +9,7 @@
 
 import { fileURLToPath } from 'url';
 import { join, dirname, basename, normalize, relative } from 'path';
-import { existsSync, readdirSync, readFileSync, writeFileSync, copyFileSync, unlinkSync, mkdirSync, renameSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync } from 'fs';
 import { spawn, execFile, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import { createConnection, Socket } from 'net';
@@ -48,7 +48,12 @@ import {
   secureToolArguments,
 } from './security/path-policy.js';
 import { ByteLogBuffer, ByteLogCursor } from './runtime/log-buffer.js';
-import { waitForSpawn } from './runtime/process-lifecycle.js';
+import { terminateProcess, waitForSpawn } from './runtime/process-lifecycle.js';
+import {
+  cleanupInteractionInjection,
+  prepareInteractionInjection,
+  type InteractionInjection,
+} from './runtime/interaction-injection.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -72,6 +77,8 @@ interface GodotProcess {
   errors: ByteLogBuffer;
   state: GodotProcessState;
   exitCode: number | null;
+  injection: InteractionInjection;
+  interactionCleaned: boolean;
 }
 
 /**
@@ -93,7 +100,6 @@ interface GameConnection {
   responseBuffer: string;
   pendingRequests: Map<number, (value: any) => void>;
   projectPath: string | null;
-  interactionServerInjectedByUs: boolean;
 }
 
 /**
@@ -116,12 +122,12 @@ export class GodotServer {
     responseBuffer: '',
     pendingRequests: new Map(),
     projectPath: null,
-    interactionServerInjectedByUs: false,
   };
   private nextRequestId: number = 1;
   private readonly errorCursor = new ByteLogCursor();
   private readonly logCursor = new ByteLogCursor();
   private readonly INTERACTION_PORT = 9090;
+  private readonly PROCESS_STOP_TIMEOUT_MS = 5000;
   private readonly AUTOLOAD_NAME = 'McpInteractionServer';
   private readonly unsafeRuntimeEnabled = process.env.GODOT_MCP_ENABLE_UNSAFE_RUNTIME === '1';
 
@@ -368,84 +374,46 @@ export class GodotServer {
   /**
    * Inject the interaction server script into the Godot project
    */
-  private injectInteractionServer(projectPath: string): void {
-    const projectFile = join(projectPath, 'project.godot');
-    const destScript = join(projectPath, 'mcp_interaction_server.gd');
-
-    const existingContent = readFileSync(projectFile, 'utf8');
-    if (existingContent.includes(this.AUTOLOAD_NAME)) {
-      this.gameConnection.interactionServerInjectedByUs = false;
-      if (!existsSync(destScript)) {
-        copyFileSync(this.interactionScriptPath, destScript);
-        this.logDebug(`Autoload present but script missing; restored ${destScript}`);
-      } else {
-        this.logDebug('Interaction server autoload and script already present; leaving project untouched');
-      }
-      return;
-    }
-
-    this.gameConnection.interactionServerInjectedByUs = true;
-
-    copyFileSync(this.interactionScriptPath, destScript);
-    this.logDebug(`Copied interaction server script to ${destScript}`);
-
-    let content = existingContent;
-
-    const autoloadLine = `${this.AUTOLOAD_NAME}="*res://mcp_interaction_server.gd"`;
-
-    if (content.includes('[autoload]')) {
-      // Add after existing [autoload] section header
-      content = content.replace('[autoload]', `[autoload]\n\n${autoloadLine}`);
-    } else {
-      // Add new [autoload] section at end
-      content += `\n[autoload]\n\n${autoloadLine}\n`;
-    }
-
-    writeFileSync(projectFile, content, 'utf8');
-    this.logDebug(`Injected ${this.AUTOLOAD_NAME} autoload into project.godot`);
+  private injectInteractionServer(projectPath: string): InteractionInjection {
+    const injection = prepareInteractionInjection(
+      projectPath,
+      this.interactionScriptPath,
+      this.AUTOLOAD_NAME
+    );
+    this.logDebug(`Prepared interaction server for ${projectPath}`);
+    return injection;
   }
 
   /**
-   * Remove the interaction server script and autoload from the project
+   * Remove only interaction files and configuration created by this server.
    */
-  private removeInteractionServer(projectPath: string): void {
-    if (!this.gameConnection.interactionServerInjectedByUs) {
-      this.logDebug('Interaction server was user-managed; skipping cleanup');
-      return;
-    }
-    this.gameConnection.interactionServerInjectedByUs = false;
+  private removeInteractionServer(injection: InteractionInjection): void {
+    cleanupInteractionInjection(injection);
+    this.logDebug(`Cleaned interaction server changes for ${injection.projectPath}`);
+  }
 
-    const projectFile = join(projectPath, 'project.godot');
-    const destScript = join(projectPath, 'mcp_interaction_server.gd');
-
-    // Remove autoload line from project.godot
-    if (existsSync(projectFile)) {
-      let content = readFileSync(projectFile, 'utf8');
-      // Remove the autoload line (and any surrounding blank line)
-      const autoloadLine = `${this.AUTOLOAD_NAME}="*res://mcp_interaction_server.gd"`;
-      content = content.replace(new RegExp(`\\n?${autoloadLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`), '\n');
-      writeFileSync(projectFile, content, 'utf8');
-      this.logDebug('Removed interaction server autoload from project.godot');
-    }
-
-    // Delete the script file
-    if (existsSync(destScript)) {
-      unlinkSync(destScript);
-      this.logDebug('Deleted interaction server script from project');
-    }
-
-    // Also clean up the .uid file if Godot created one
-    const uidFile = destScript + '.uid';
-    if (existsSync(uidFile)) {
-      unlinkSync(uidFile);
-      this.logDebug('Deleted interaction server .uid file');
+  private cleanupProcessInteraction(processContext: GodotProcess): boolean {
+    if (processContext.interactionCleaned) return true;
+    try {
+      this.removeInteractionServer(processContext.injection);
+      processContext.interactionCleaned = true;
+      if (this.gameConnection.projectPath === processContext.projectPath) {
+        this.gameConnection.projectPath = null;
+      }
+      return true;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Unknown interaction cleanup error';
+      processContext.errors.append(`Interaction cleanup failed: ${message}\n`);
+      console.error(`[SERVER] Interaction cleanup failed: ${message}`);
+      return false;
     }
   }
 
   /**
    * Connect to the game's TCP interaction server with retries
    */
-  private async connectToGame(projectPath: string): Promise<void> {
+  private async connectToGame(projectPath: string, processContext: GodotProcess): Promise<void> {
+    if (this.activeProcess !== processContext) return;
     this.gameConnection.projectPath = projectPath;
 
     // Initial delay to let the game start up
@@ -455,14 +423,19 @@ export class GodotServer {
     const retryDelay = 500;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      if (!this.activeProcess) {
-        this.logDebug('Game process no longer running, aborting connection');
+      if (this.activeProcess !== processContext) {
+        this.logDebug('Game process generation changed, aborting stale connection attempt');
         return;
       }
 
       try {
         await new Promise<void>((resolve, reject) => {
           const socket = createConnection({ host: '127.0.0.1', port: this.INTERACTION_PORT }, () => {
+            if (this.activeProcess !== processContext) {
+              socket.destroy();
+              reject(new Error('Game process generation changed during connection.'));
+              return;
+            }
             this.gameConnection.socket = socket;
             this.gameConnection.connected = true;
             this.gameConnection.responseBuffer = '';
@@ -471,6 +444,7 @@ export class GodotServer {
             console.error(`[SERVER] Connected to game interaction server on port ${this.INTERACTION_PORT}`);
 
             socket.on('data', (data: Buffer) => {
+              if (this.activeProcess !== processContext || this.gameConnection.socket !== socket) return;
               this.gameConnection.responseBuffer += data.toString();
               // Process complete lines
               while (this.gameConnection.responseBuffer.includes('\n')) {
@@ -490,6 +464,7 @@ export class GodotServer {
 
             socket.on('close', () => {
               this.logDebug('Game interaction connection closed');
+              if (this.gameConnection.socket !== socket) return;
               this.gameConnection.connected = false;
               this.gameConnection.socket = null;
               this.rejectAllPending({ error: 'Connection closed' });
@@ -510,6 +485,7 @@ export class GodotServer {
         // Successfully connected
         return;
       } catch (err) {
+        if (this.activeProcess !== processContext) return;
         this.logDebug(`Connection attempt ${attempt}/${maxAttempts} failed, retrying in ${retryDelay}ms...`);
         await new Promise(resolve => setTimeout(resolve, retryDelay));
       }
@@ -586,19 +562,21 @@ export class GodotServer {
   private async cleanup() {
     this.logDebug('Cleaning up resources');
     this.disconnectFromGame();
-    if (this.gameConnection.projectPath) {
-      this.removeInteractionServer(this.gameConnection.projectPath);
-      this.gameConnection.projectPath = null;
-    }
     if (this.activeProcess) {
       this.logDebug('Killing active Godot process');
       const processContext = this.activeProcess;
-      processContext.state = 'stopping';
-      this.latestProcess = processContext;
-      this.activeProcess = null;
-      processContext.process.kill();
+      await this.stopProcessContext(processContext);
+      this.cleanupProcessInteraction(processContext);
     }
     await this.server.close();
+  }
+
+  private async stopProcessContext(processContext: GodotProcess): Promise<void> {
+    processContext.state = 'stopping';
+    this.latestProcess = processContext;
+    await terminateProcess(processContext.process, this.PROCESS_STOP_TIMEOUT_MS);
+    if (processContext.state === 'stopping') processContext.state = 'exited';
+    if (this.activeProcess === processContext) this.activeProcess = null;
   }
 
   private async gameCommand(
@@ -869,7 +847,7 @@ export class GodotServer {
         },
         {
           name: 'get_debug_output',
-          description: 'Get the current debug output and errors',
+          description: 'Get bounded debug output retained for the active or most recent Godot process',
           inputSchema: {
             type: 'object',
             properties: {},
@@ -3767,7 +3745,7 @@ export class GodotServer {
     }
 
     let processContext: GodotProcess | null = null;
-    let interactionPrepared = false;
+    let interactionInjection: InteractionInjection | null = null;
     try {
       // Check if the project directory exists and contains a project.godot file
       const projectFile = join(args.projectPath, 'project.godot');
@@ -3781,20 +3759,15 @@ export class GodotServer {
       if (this.activeProcess) {
         this.logDebug('Killing existing Godot process before starting a new one');
         const previousProcess = this.activeProcess;
-        previousProcess.state = 'stopping';
-        this.latestProcess = previousProcess;
-        this.activeProcess = null;
         this.disconnectFromGame();
-        if (this.gameConnection.projectPath) {
-          this.removeInteractionServer(this.gameConnection.projectPath);
-          this.gameConnection.projectPath = null;
+        await this.stopProcessContext(previousProcess);
+        if (!this.cleanupProcessInteraction(previousProcess)) {
+          throw new Error('Previous Godot process stopped, but interaction cleanup could not be completed.');
         }
-        previousProcess.process.kill();
       }
 
       // Inject interaction server before launching
-      this.injectInteractionServer(args.projectPath);
-      interactionPrepared = true;
+      interactionInjection = this.injectInteractionServer(args.projectPath);
 
       const cmdArgs = ['-d', '--path', args.projectPath];
       if (args.scene && validatePath(args.scene)) {
@@ -3811,6 +3784,8 @@ export class GodotServer {
         errors: new ByteLogBuffer(),
         state: 'starting',
         exitCode: null,
+        injection: interactionInjection,
+        interactionCleaned: false,
       };
       const currentProcess = processContext;
       this.activeProcess = currentProcess;
@@ -3838,10 +3813,7 @@ export class GodotServer {
         this.logDebug(`Godot process exited with code ${code}`);
         if (this.activeProcess === currentProcess) {
           this.disconnectFromGame();
-          this.removeInteractionServer(currentProcess.projectPath);
-          if (this.gameConnection.projectPath === currentProcess.projectPath) {
-            this.gameConnection.projectPath = null;
-          }
+          this.cleanupProcessInteraction(currentProcess);
           this.activeProcess = null;
         }
       });
@@ -3852,10 +3824,7 @@ export class GodotServer {
         console.error('Godot process error:', error.message);
         if (this.activeProcess === currentProcess) {
           this.disconnectFromGame();
-          this.removeInteractionServer(currentProcess.projectPath);
-          if (this.gameConnection.projectPath === currentProcess.projectPath) {
-            this.gameConnection.projectPath = null;
-          }
+          this.cleanupProcessInteraction(currentProcess);
           this.activeProcess = null;
         }
       });
@@ -3867,7 +3836,7 @@ export class GodotServer {
       currentProcess.state = 'running';
 
       // Start async TCP connection to the interaction server (fire-and-forget)
-      this.connectToGame(args.projectPath).catch(err => {
+      this.connectToGame(args.projectPath, currentProcess).catch(err => {
         this.logDebug(`Failed to connect to game interaction server: ${err}`);
       });
 
@@ -3885,20 +3854,33 @@ export class GodotServer {
         processContext.state = 'failed';
         processContext.errors.append(`${errorMessage}\n`);
         this.latestProcess = processContext;
-        if (this.activeProcess === processContext) this.activeProcess = null;
-        if (!processContext.process.killed) {
+        if (processContext.process.exitCode === null) {
           try {
-            processContext.process.kill();
-          } catch {
-            // The process may already have exited after the failed spawn handshake.
+            await this.stopProcessContext(processContext);
+          } catch (terminationError: unknown) {
+            const terminationMessage = terminationError instanceof Error
+              ? terminationError.message
+              : 'Unknown termination error';
+            processContext.errors.append(`${terminationMessage}\n`);
+            return createErrorResponse(
+              `Failed to run Godot project and could not confirm process termination: ${terminationMessage}`
+            );
           }
         }
         this.disconnectFromGame();
-        if (this.gameConnection.projectPath === processContext.projectPath) {
-          this.gameConnection.projectPath = null;
+        this.cleanupProcessInteraction(processContext);
+      } else if (interactionInjection) {
+        try {
+          this.removeInteractionServer(interactionInjection);
+        } catch (cleanupError: unknown) {
+          const cleanupMessage = cleanupError instanceof Error
+            ? cleanupError.message
+            : 'Unknown interaction cleanup error';
+          return createErrorResponse(
+            `Failed to run Godot project: ${errorMessage}. Interaction cleanup also failed: ${cleanupMessage}`
+          );
         }
       }
-      if (interactionPrepared) this.removeInteractionServer(args.projectPath);
       return createErrorResponse(
         `Failed to run Godot project: ${errorMessage}`
       );
@@ -3951,20 +3933,21 @@ export class GodotServer {
 
     this.logDebug('Stopping active Godot process');
     const processContext = this.activeProcess;
-    processContext.state = 'stopping';
-    this.latestProcess = processContext;
-    this.activeProcess = null;
     this.disconnectFromGame();
-    processContext.process.kill();
+    try {
+      await this.stopProcessContext(processContext);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown termination error';
+      return createErrorResponse(`Failed to stop Godot process: ${errorMessage}`);
+    }
     const output = processContext.output.lines();
     const errors = processContext.errors.lines();
     this.errorCursor.reset();
     this.logCursor.reset();
 
-    // Remove injected interaction server
-    if (this.gameConnection.projectPath) {
-      this.removeInteractionServer(this.gameConnection.projectPath);
-      this.gameConnection.projectPath = null;
+    // Remove injected interaction server after confirmed process termination.
+    if (!this.cleanupProcessInteraction(processContext)) {
+      return createErrorResponse('Godot stopped, but interaction cleanup could not be completed safely.');
     }
 
     return {
