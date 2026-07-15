@@ -1,7 +1,7 @@
 {
   "name": "gi-go-mcp",
   "version": "3.1.0",
-  "description": "gi-go-mcp \u2014 Gizmos Godot MCP",
+  "description": "gi-go-mcp — Gizmos Godot MCP",
   "keywords": [
     "godot",
     "mcp",
@@ -23,32 +23,33 @@
   },
   "mcpName": "io.github.defkil/gi-go-mcp",
   "license": "MIT",
-  "author": "Oliver Gr\u00fcttner",
+  "author": "Oliver Grüttner",
   "contributors": [
     "Tugcan Topaloglu",
     "Solomon Elias <solomon@sippy.ai> (https://github.com/Coding-Solo)"
   ],
   "type": "module",
   "bin": {
-    "gi-go-mcp": "./build/index.js"
+    "gi-go-mcp": "./build/bin.js"
   },
   "files": [
     "build"
   ],
   "scripts": {
     "build": "tsc && node scripts/build.js",
-    "inspector": "npx @modelcontextprotocol/inspector build/index.js",
+    "inspector": "npx @modelcontextprotocol/inspector build/bin.js",
     "prepare": "npm run build",
     "version": "node scripts/sync-version.js && git add package-lock.json server.json",
     "watch": "tsc --watch",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:smoke": "node scripts/smoke-test.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0"
   },
   "devDependencies": {
-    "@types/node": "^20.11.24",
+    "@types/node": "^20.19.43",
     "@vitest/coverage-v8": "^3.2.6",
     "typescript": "^5.3.3",
     "vitest": "^3.2.6"

@@ -41,6 +41,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: MCP Stdio Smoke Test
+        run: npm run test:smoke
+
       - name: Test
         run: npm test
 

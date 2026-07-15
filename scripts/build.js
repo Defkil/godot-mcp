@@ -6,9 +6,9 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Make the build/index.js file executable
+// Make the CLI entrypoint executable for source builds on POSIX.
 try {
-  fs.chmodSync(path.join(__dirname, '..', 'build', 'index.js'), '755');
+  fs.chmodSync(path.join(__dirname, '..', 'build', 'bin.js'), 0o755);
 } catch (e) {
   // Ignore if doesn't exist yet, it's just a permission change
 }

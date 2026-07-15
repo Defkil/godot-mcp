@@ -101,7 +101,7 @@ interface GameConnection {
 /**
  * Main server class for the Godot MCP server
  */
-class GodotServer {
+export class GodotServer {
   private server: Server;
   private activeProcess: GodotProcess | null = null;
   private godotPath: string | null = null;
@@ -7076,7 +7076,7 @@ class GodotServer {
       if (!this.godotPath) {
         console.error('[SERVER] Failed to find a valid Godot executable path');
         console.error('[SERVER] Please set GODOT_PATH environment variable or provide a valid path');
-        process.exit(1);
+        throw new Error('Failed to find a valid Godot executable path');
       }
 
       // Check if the path is valid
@@ -7104,15 +7104,7 @@ class GodotServer {
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error('[SERVER] Failed to start:', errorMessage);
-      process.exit(1);
+      throw error;
     }
   }
 }
-
-// Create and run the server
-const server = new GodotServer();
-server.run().catch((error: unknown) => {
-  const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-  console.error('Failed to run server:', errorMessage);
-  process.exit(1);
-});

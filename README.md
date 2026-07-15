@@ -28,7 +28,7 @@ To use this MCP server with Claude or another AI assistant, configure your MCP c
   "mcpServers": {
     "gi-go-mcp": {
       "command": "node",
-      "args": ["/path/to/gi-go-mcp/build/index.js"],
+      "args": ["/path/to/gi-go-mcp/build/bin.js"],
       "env": {
         "GODOT_PATH": "/path/to/godot",
         "GODOT_MCP_ALLOWED_DIRS": "/path/to/my/godot/projects"
