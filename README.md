@@ -48,7 +48,7 @@ For an explicitly unrestricted local compatibility session, set `GODOT_MCP_UNSAF
 - **Script Management**: Read, write, and execute GDScript.
 - **Runtime Bridge**: Connect to a running Godot game instance via TCP.
 
-**Runtime bridge caveat:** `run_project` copies `mcp_interaction_server.gd` and updates `project.godot` to register an autoload. A clean stop removes changes created by the server; a crash can require manual cleanup. Child stdout and stderr are capped at 1 MiB per stream and the latest diagnostics remain available after exit.
+**Runtime bridge caveat:** The current bridge uses an unauthenticated fixed localhost port and is disabled by default. Set `GODOT_MCP_ENABLE_UNSAFE_RUNTIME=1` only for a trusted local session. When enabled, `run_project` copies `mcp_interaction_server.gd` and updates `project.godot` to register an autoload; a clean stop removes changes created by the server, while a crash can require manual cleanup. Child stdout and stderr are capped at 1 MiB per stream and the latest diagnostics remain available after exit.
 
 Dynamic ports, multi-session ownership, process-tree kill escalation, and zero-pollution runtime injection are planned but not implemented.
 

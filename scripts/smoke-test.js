@@ -1,5 +1,5 @@
 import process from 'node:process';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -13,6 +13,11 @@ const allowedRoot = path.join(sandbox, 'allowed');
 const outsideRoot = path.join(sandbox, 'outside');
 mkdirSync(allowedRoot);
 mkdirSync(outsideRoot);
+const projectRoot = path.join(allowedRoot, 'runtime-disabled');
+const projectFile = path.join(projectRoot, 'project.godot');
+const projectContent = '[application]\nconfig/name="Runtime Disabled Smoke"\n';
+mkdirSync(projectRoot);
+writeFileSync(projectFile, projectContent, 'utf8');
 
 const transport = new StdioClientTransport({
   command: process.execPath,
@@ -59,7 +64,24 @@ try {
     throw new Error('Path policy rejected the configured project discovery root.');
   }
 
-  console.log(`MCP stdio smoke passed with ${response.tools.length} tools and path containment.`);
+  const runtimeRejected = await client.callTool(
+    { name: 'run_project', arguments: { projectPath: projectRoot } },
+    undefined,
+    { signal: controller.signal }
+  );
+  if (runtimeRejected.isError !== true || !JSON.stringify(runtimeRejected).includes('disabled')) {
+    throw new Error('Unsafe runtime bridge was not disabled by default.');
+  }
+  if (
+    readFileSync(projectFile, 'utf8') !== projectContent ||
+    existsSync(path.join(projectRoot, 'mcp_interaction_server.gd'))
+  ) {
+    throw new Error('Disabled runtime bridge modified the project.');
+  }
+
+  console.log(
+    `MCP stdio smoke passed with ${response.tools.length} tools, path containment, and safe runtime defaults.`
+  );
 } finally {
   clearTimeout(timeout);
   await client.close().catch(() => undefined);

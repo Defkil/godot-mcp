@@ -123,6 +123,7 @@ export class GodotServer {
   private readonly logCursor = new ByteLogCursor();
   private readonly INTERACTION_PORT = 9090;
   private readonly AUTOLOAD_NAME = 'McpInteractionServer';
+  private readonly unsafeRuntimeEnabled = process.env.GODOT_MCP_ENABLE_UNSAFE_RUNTIME === '1';
 
   constructor(config?: GodotServerConfig) {
     this.pathPolicy = pathPolicyFromEnvironment();
@@ -3746,6 +3747,12 @@ export class GodotServer {
   private async handleRunProject(args: any) {
     // Normalize parameters to camelCase
     args = normalizeParameters(args);
+
+    if (!this.unsafeRuntimeEnabled) {
+      return createErrorResponse(
+        'Runtime bridge disabled: the current fixed-port bridge is unauthenticated. Set GODOT_MCP_ENABLE_UNSAFE_RUNTIME=1 only for a trusted local session.'
+      );
+    }
     
     if (!args.projectPath) {
       return createErrorResponse(
