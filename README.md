@@ -46,7 +46,9 @@ Configured roots are enforced after native path canonicalization, including syml
 - **Script Management**: Read, write, and execute GDScript.
 - **Runtime Bridge**: Connect to a running Godot game instance via TCP.
 
-**Runtime bridge caveat:** `run_project` copies `mcp_interaction_server.gd` and updates `project.godot` to register an autoload. A clean stop removes changes created by the server; a crash can require manual cleanup.
+**Runtime bridge caveat:** `run_project` copies `mcp_interaction_server.gd` and updates `project.godot` to register an autoload. A clean stop removes changes created by the server; a crash can require manual cleanup. Child stdout and stderr are capped at 1 MiB per stream and the latest diagnostics remain available after exit.
+
+Dynamic ports, multi-session ownership, process-tree kill escalation, and zero-pollution runtime injection are planned but not implemented.
 
 ## Architecture Summary
 The server runs via Node.js, implementing the Model Context Protocol (MCP). It communicates with the Godot engine using headless command-line execution for static operations, and a TCP socket connection for dynamic runtime interactions when a game instance is running.

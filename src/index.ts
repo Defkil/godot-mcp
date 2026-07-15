@@ -10,7 +10,7 @@
 import { fileURLToPath } from 'url';
 import { join, dirname, basename, normalize, relative } from 'path';
 import { existsSync, readdirSync, readFileSync, writeFileSync, copyFileSync, unlinkSync, mkdirSync, renameSync } from 'fs';
-import { spawn, execFile } from 'child_process';
+import { spawn, execFile, type ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import { createConnection, Socket } from 'net';
 
@@ -47,6 +47,8 @@ import {
   pathPolicyFromEnvironment,
   secureToolArguments,
 } from './security/path-policy.js';
+import { ByteLogBuffer, ByteLogCursor } from './runtime/log-buffer.js';
+import { waitForSpawn } from './runtime/process-lifecycle.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -61,10 +63,15 @@ const __dirname = dirname(__filename);
 /**
  * Interface representing a running Godot process
  */
+type GodotProcessState = 'starting' | 'running' | 'stopping' | 'exited' | 'failed';
+
 interface GodotProcess {
-  process: any;
-  output: string[];
-  errors: string[];
+  process: ChildProcess;
+  projectPath: string;
+  output: ByteLogBuffer;
+  errors: ByteLogBuffer;
+  state: GodotProcessState;
+  exitCode: number | null;
 }
 
 /**
@@ -96,6 +103,7 @@ export class GodotServer {
   private server: Server;
   private readonly pathPolicy: PathPolicy;
   private activeProcess: GodotProcess | null = null;
+  private latestProcess: GodotProcess | null = null;
   private godotPath: string | null = null;
   private operationsScriptPath: string;
   private interactionScriptPath: string;
@@ -111,8 +119,8 @@ export class GodotServer {
     interactionServerInjectedByUs: false,
   };
   private nextRequestId: number = 1;
-  private lastErrorIndex: number = 0;
-  private lastLogIndex: number = 0;
+  private readonly errorCursor = new ByteLogCursor();
+  private readonly logCursor = new ByteLogCursor();
   private readonly INTERACTION_PORT = 9090;
   private readonly AUTOLOAD_NAME = 'McpInteractionServer';
 
@@ -583,8 +591,11 @@ export class GodotServer {
     }
     if (this.activeProcess) {
       this.logDebug('Killing active Godot process');
-      this.activeProcess.process.kill();
+      const processContext = this.activeProcess;
+      processContext.state = 'stopping';
+      this.latestProcess = processContext;
       this.activeProcess = null;
+      processContext.process.kill();
     }
     await this.server.close();
   }
@@ -3748,7 +3759,8 @@ export class GodotServer {
       );
     }
 
-
+    let processContext: GodotProcess | null = null;
+    let interactionPrepared = false;
     try {
       // Check if the project directory exists and contains a project.godot file
       const projectFile = join(args.projectPath, 'project.godot');
@@ -3761,15 +3773,21 @@ export class GodotServer {
       // Kill any existing process
       if (this.activeProcess) {
         this.logDebug('Killing existing Godot process before starting a new one');
+        const previousProcess = this.activeProcess;
+        previousProcess.state = 'stopping';
+        this.latestProcess = previousProcess;
+        this.activeProcess = null;
         this.disconnectFromGame();
         if (this.gameConnection.projectPath) {
           this.removeInteractionServer(this.gameConnection.projectPath);
+          this.gameConnection.projectPath = null;
         }
-        this.activeProcess.process.kill();
+        previousProcess.process.kill();
       }
 
       // Inject interaction server before launching
       this.injectInteractionServer(args.projectPath);
+      interactionPrepared = true;
 
       const cmdArgs = ['-d', '--path', args.projectPath];
       if (args.scene && validatePath(args.scene)) {
@@ -3778,46 +3796,68 @@ export class GodotServer {
       }
 
       this.logDebug(`Running Godot project: ${args.projectPath}`);
-      const process = spawn(this.godotPath!, cmdArgs, { stdio: 'pipe' });
-      const output: string[] = [];
-      const errors: string[] = [];
+      const child = spawn(this.godotPath!, cmdArgs, { stdio: 'pipe' });
+      processContext = {
+        process: child,
+        projectPath: args.projectPath,
+        output: new ByteLogBuffer(),
+        errors: new ByteLogBuffer(),
+        state: 'starting',
+        exitCode: null,
+      };
+      const currentProcess = processContext;
+      this.activeProcess = currentProcess;
+      this.latestProcess = currentProcess;
+      this.errorCursor.reset();
+      this.logCursor.reset();
 
-      process.stdout?.on('data', (data: Buffer) => {
-        const lines = data.toString().split('\n');
-        output.push(...lines);
-        lines.forEach((line: string) => {
+      child.stdout?.on('data', (data: Buffer) => {
+        currentProcess.output.append(data);
+        data.toString().split('\n').forEach((line: string) => {
           if (line.trim()) this.logDebug(`[Godot stdout] ${line}`);
         });
       });
 
-      process.stderr?.on('data', (data: Buffer) => {
-        const lines = data.toString().split('\n');
-        errors.push(...lines);
-        lines.forEach((line: string) => {
+      child.stderr?.on('data', (data: Buffer) => {
+        currentProcess.errors.append(data);
+        data.toString().split('\n').forEach((line: string) => {
           if (line.trim()) this.logDebug(`[Godot stderr] ${line}`);
         });
       });
 
-      process.on('exit', (code: number | null) => {
+      child.on('exit', (code: number | null) => {
+        currentProcess.exitCode = code;
+        currentProcess.state = 'exited';
         this.logDebug(`Godot process exited with code ${code}`);
-        this.disconnectFromGame();
-        if (this.gameConnection.projectPath) {
-          this.removeInteractionServer(this.gameConnection.projectPath);
-          this.gameConnection.projectPath = null;
-        }
-        if (this.activeProcess && this.activeProcess.process === process) {
+        if (this.activeProcess === currentProcess) {
+          this.disconnectFromGame();
+          this.removeInteractionServer(currentProcess.projectPath);
+          if (this.gameConnection.projectPath === currentProcess.projectPath) {
+            this.gameConnection.projectPath = null;
+          }
           this.activeProcess = null;
         }
       });
 
-      process.on('error', (err: Error) => {
-        console.error('Failed to start Godot process:', err);
-        if (this.activeProcess && this.activeProcess.process === process) {
+      child.on('error', (error: Error) => {
+        currentProcess.state = 'failed';
+        currentProcess.errors.append(`${error.message}\n`);
+        console.error('Godot process error:', error.message);
+        if (this.activeProcess === currentProcess) {
+          this.disconnectFromGame();
+          this.removeInteractionServer(currentProcess.projectPath);
+          if (this.gameConnection.projectPath === currentProcess.projectPath) {
+            this.gameConnection.projectPath = null;
+          }
           this.activeProcess = null;
         }
       });
 
-      this.activeProcess = { process, output, errors };
+      await waitForSpawn(child, 5000);
+      if (currentProcess.state === 'failed' || currentProcess.state === 'exited') {
+        throw new Error('Godot exited before startup completed.');
+      }
+      currentProcess.state = 'running';
 
       // Start async TCP connection to the interaction server (fire-and-forget)
       this.connectToGame(args.projectPath).catch(err => {
@@ -3828,12 +3868,30 @@ export class GodotServer {
         content: [
           {
             type: 'text',
-            text: `Godot project started in debug mode. Use get_debug_output to see output. Game interaction server connecting on port ${this.INTERACTION_PORT}...`,
+            text: `Godot process spawned in debug mode. Use get_debug_output to inspect bounded diagnostics. The runtime bridge is connecting on port ${this.INTERACTION_PORT}...`,
           },
         ],
       };
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      if (processContext) {
+        processContext.state = 'failed';
+        processContext.errors.append(`${errorMessage}\n`);
+        this.latestProcess = processContext;
+        if (this.activeProcess === processContext) this.activeProcess = null;
+        if (!processContext.process.killed) {
+          try {
+            processContext.process.kill();
+          } catch {
+            // The process may already have exited after the failed spawn handshake.
+          }
+        }
+        this.disconnectFromGame();
+        if (this.gameConnection.projectPath === processContext.projectPath) {
+          this.gameConnection.projectPath = null;
+        }
+      }
+      if (interactionPrepared) this.removeInteractionServer(args.projectPath);
       return createErrorResponse(
         `Failed to run Godot project: ${errorMessage}`
       );
@@ -3844,9 +3902,10 @@ export class GodotServer {
    * Handle the get_debug_output tool
    */
   private async handleGetDebugOutput() {
-    if (!this.activeProcess) {
+    const processContext = this.activeProcess ?? this.latestProcess;
+    if (!processContext) {
       return createErrorResponse(
-        'No active Godot process.'
+        'No current or retained Godot process diagnostics.'
       );
     }
 
@@ -3856,8 +3915,14 @@ export class GodotServer {
           type: 'text',
           text: JSON.stringify(
             {
-              output: this.activeProcess.output,
-              errors: this.activeProcess.errors,
+              state: processContext.state,
+              exitCode: processContext.exitCode,
+              output: processContext.output.lines(),
+              errors: processContext.errors.lines(),
+              retainedBytes: {
+                output: processContext.output.byteLength,
+                errors: processContext.errors.byteLength,
+              },
             },
             null,
             2
@@ -3878,13 +3943,16 @@ export class GodotServer {
     }
 
     this.logDebug('Stopping active Godot process');
-    this.disconnectFromGame();
-    this.activeProcess.process.kill();
-    const output = this.activeProcess.output;
-    const errors = this.activeProcess.errors;
+    const processContext = this.activeProcess;
+    processContext.state = 'stopping';
+    this.latestProcess = processContext;
     this.activeProcess = null;
-    this.lastErrorIndex = 0;
-    this.lastLogIndex = 0;
+    this.disconnectFromGame();
+    processContext.process.kill();
+    const output = processContext.output.lines();
+    const errors = processContext.errors.lines();
+    this.errorCursor.reset();
+    this.logCursor.reset();
 
     // Remove injected interaction server
     if (this.gameConnection.projectPath) {
@@ -3898,7 +3966,8 @@ export class GodotServer {
           type: 'text',
           text: JSON.stringify(
             {
-              message: 'Godot project stopped',
+              message: 'Godot stop requested',
+              state: processContext.state,
               finalOutput: output,
               finalErrors: errors,
             },
@@ -5144,17 +5213,15 @@ export class GodotServer {
   private async handleGameGetErrors() {
     if (!this.activeProcess)
       return createErrorResponse('No active Godot process. Use run_project first.');
-    const errors = this.activeProcess.errors.slice(this.lastErrorIndex);
-    this.lastErrorIndex = this.activeProcess.errors.length;
-    return { content: [{ type: 'text', text: JSON.stringify({ count: errors.length, errors }, null, 2) }] };
+    const snapshot = this.errorCursor.read(this.activeProcess.errors);
+    return { content: [{ type: 'text', text: JSON.stringify({ count: snapshot.lines.length, errors: snapshot.lines, truncated: snapshot.truncated }, null, 2) }] };
   }
 
   private async handleGameGetLogs() {
     if (!this.activeProcess)
       return createErrorResponse('No active Godot process. Use run_project first.');
-    const logs = this.activeProcess.output.slice(this.lastLogIndex);
-    this.lastLogIndex = this.activeProcess.output.length;
-    return { content: [{ type: 'text', text: JSON.stringify({ count: logs.length, logs }, null, 2) }] };
+    const snapshot = this.logCursor.read(this.activeProcess.output);
+    return { content: [{ type: 'text', text: JSON.stringify({ count: snapshot.lines.length, logs: snapshot.lines, truncated: snapshot.truncated }, null, 2) }] };
   }
 
   // --- Enhanced input handlers ---
