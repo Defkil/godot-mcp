@@ -8,7 +8,7 @@
  */
 
 import { fileURLToPath } from 'url';
-import { join, dirname, basename, normalize, resolve, relative, isAbsolute } from 'path';
+import { join, dirname, basename, normalize, relative } from 'path';
 import { existsSync, readdirSync, readFileSync, writeFileSync, copyFileSync, unlinkSync, mkdirSync, renameSync } from 'fs';
 import { spawn, execFile } from 'child_process';
 import { promisify } from 'util';
@@ -41,25 +41,16 @@ import {
   type OperationParams,
 } from './utils.js';
 import { getMetadata } from './metadata.js';
+import {
+  PathPolicy,
+  PathPolicyError,
+  pathPolicyFromEnvironment,
+  secureToolArguments,
+} from './security/path-policy.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
 const GODOT_DEBUG_MODE: boolean = true; // Always use GODOT DEBUG MODE
-
-const ALLOWED_PROJECT_ROOTS: string[] = (process.env.GODOT_MCP_ALLOWED_DIRS || '')
-  .split(process.platform === 'win32' ? /[;,]/ : /[:,]/)
-  .map(p => p.trim())
-  .filter(p => p.length > 0)
-  .map(p => resolve(p));
-
-function isPathWithinAllowedRoots(target: string): boolean {
-  if (ALLOWED_PROJECT_ROOTS.length === 0) return true;
-  const resolvedTarget = resolve(target);
-  return ALLOWED_PROJECT_ROOTS.some(root => {
-    const rel = relative(root, resolvedTarget);
-    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
-  });
-}
 
 const execFileAsync = promisify(execFile);
 
@@ -103,6 +94,7 @@ interface GameConnection {
  */
 export class GodotServer {
   private server: Server;
+  private readonly pathPolicy: PathPolicy;
   private activeProcess: GodotProcess | null = null;
   private godotPath: string | null = null;
   private operationsScriptPath: string;
@@ -125,6 +117,7 @@ export class GodotServer {
   private readonly AUTOLOAD_NAME = 'McpInteractionServer';
 
   constructor(config?: GodotServerConfig) {
+    this.pathPolicy = pathPolicyFromEnvironment();
     // Apply configuration if provided
     let debugMode = DEBUG_MODE;
     let godotDebugMode = GODOT_DEBUG_MODE;
@@ -3313,6 +3306,18 @@ export class GodotServer {
     // Handle tool calls
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       this.logDebug(`Handling tool request: ${request.params.name}`);
+      try {
+        request.params.arguments = secureToolArguments(
+          request.params.name,
+          request.params.arguments,
+          this.pathPolicy
+        );
+      } catch (error: unknown) {
+        if (error instanceof PathPolicyError) {
+          return createErrorResponse(`Path policy rejected the request: ${error.message}`);
+        }
+        throw error;
+      }
       switch (request.params.name) {
         case 'launch_editor':
           return await this.handleLaunchEditor(request.params.arguments);
@@ -3739,11 +3744,6 @@ export class GodotServer {
       );
     }
 
-    if (!isPathWithinAllowedRoots(args.projectPath)) {
-      return createErrorResponse(
-        `Project path is outside the allowed roots (GODOT_MCP_ALLOWED_DIRS): ${args.projectPath}`
-      );
-    }
 
     try {
       // Check if the project directory exists and contains a project.godot file

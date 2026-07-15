@@ -6,6 +6,6 @@ Currently, only the latest release on the `main` branch is actively supported wi
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability within this project, please report it via GitHub Issues or contact the maintainers directly. Do not disclose the vulnerability publicly until it has been resolved.
+Report vulnerabilities privately through the repository's GitHub Security Advisory form. Do not open a public issue for an undisclosed vulnerability.
 
 We will attempt to acknowledge and resolve reported vulnerabilities in a timely manner, but we do not guarantee a specific SLA for fixes.

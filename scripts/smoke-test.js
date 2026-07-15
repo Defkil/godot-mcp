@@ -1,10 +1,18 @@
 import process from 'node:process';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const timeoutMs = 15_000;
 const controller = new AbortController();
 const timeout = setTimeout(() => controller.abort(), timeoutMs);
+const sandbox = mkdtempSync(path.join(tmpdir(), 'gi-go-mcp-smoke-'));
+const allowedRoot = path.join(sandbox, 'allowed');
+const outsideRoot = path.join(sandbox, 'outside');
+mkdirSync(allowedRoot);
+mkdirSync(outsideRoot);
 
 const transport = new StdioClientTransport({
   command: process.execPath,
@@ -12,6 +20,7 @@ const transport = new StdioClientTransport({
   env: {
     ...process.env,
     GODOT_PATH: process.execPath,
+    GODOT_MCP_ALLOWED_DIRS: JSON.stringify([allowedRoot]),
   },
   stderr: 'pipe',
 });
@@ -29,9 +38,28 @@ try {
     if (!names.has(required)) throw new Error(`Missing representative tool: ${required}`);
   }
 
-  console.log(`MCP stdio smoke passed with ${response.tools.length} tools.`);
+  const rejected = await client.callTool(
+    { name: 'list_projects', arguments: { directory: outsideRoot, recursive: false } },
+    undefined,
+    { signal: controller.signal }
+  );
+  if (rejected.isError !== true) {
+    throw new Error('Path policy did not reject project discovery outside the configured root.');
+  }
+
+  const accepted = await client.callTool(
+    { name: 'list_projects', arguments: { directory: allowedRoot, recursive: false } },
+    undefined,
+    { signal: controller.signal }
+  );
+  if (accepted.isError === true) {
+    throw new Error('Path policy rejected the configured project discovery root.');
+  }
+
+  console.log(`MCP stdio smoke passed with ${response.tools.length} tools and path containment.`);
 } finally {
   clearTimeout(timeout);
   await client.close().catch(() => undefined);
   await transport.close().catch(() => undefined);
+  rmSync(sandbox, { recursive: true, force: true });
 }
