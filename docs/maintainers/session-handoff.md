@@ -67,8 +67,15 @@ be rerun on the final committed state.
 
 - The capability-policy package through `a5bd1fc` has an independent NeuralWatt
   `VERDICT | ACCEPT` with unchanged HEAD/status fingerprints.
-- This network-classification follow-up is committed locally and still requires
-  independent NeuralWatt review of its exact immutable commit before it is accepted.
+- NeuralWatt independently reviewed the exact immutable network-classification
+  commit `79b1d4d855f38491258ab18c7a54c6aa2a86926b` and returned
+  `VERDICT | ACCEPT`. The guarded runner verified unchanged pre/post HEAD, branch,
+  index tree, and empty status. The full transcript is preserved at
+  `C:/Users/mail/AppData/Local/agent-runtime/state/neuralwatt-reports/godot-mcp-79b1d4d-review.txt`.
+- The reviewer confirmed the four-tool `network` map, wire-level denials/admissions,
+  digit-safe closed-list coverage, the 158-tool contract, unchanged profile/schema/
+  handler surfaces, issue-inventory truthfulness, and no path/auth/protocol/lifecycle/
+  identity/attribution regression.
 - An AGY package-selection attempt on this tick produced no deliverable because its
   read-only command permission was auto-denied. That is infrastructure/no-verdict,
   not product evidence and not a content rejection.
@@ -77,24 +84,22 @@ be rerun on the final committed state.
 
 ## Open inventory priorities
 
-1. Independent NeuralWatt review of the exact network-classification commit; repair
-   any locally verified blocking finding before selecting more scope.
-2. Rate, request-size, and concurrency limits at the request boundary
+1. Rate, request-size, and concurrency limits at the request boundary
    (`[Coding-Solo#97]` second half).
-3. Real `.tscn` resource-property round-trip for immediate-upstream #8/#13.
-4. Running-bridge `Vector2`/`Vector3`/`Color` tween regression (#11).
-5. Physics-frame `game_wait` verification (#14).
-6. Generic headless Godot test runner with GUT adapter (#29).
-7. C# attachment in .NET projects (#114).
-8. Texture import diagnostics (#103).
-9. Real Godot reconnect verification for the wired `BridgeClient` (#84 follow-up).
-10. Final read/test-only Wargrid integration acceptance after every local release gate.
+2. Real `.tscn` resource-property round-trip for immediate-upstream #8/#13.
+3. Running-bridge `Vector2`/`Vector3`/`Color` tween regression (#11).
+4. Physics-frame `game_wait` verification (#14).
+5. Generic headless Godot test runner with GUT adapter (#29).
+6. C# attachment in .NET projects (#114).
+7. Texture import diagnostics (#103).
+8. Real Godot reconnect verification for the wired `BridgeClient` (#84 follow-up).
+9. Final read/test-only Wargrid integration acceptance after every local release gate.
 
 ## Next safe action
 
-Verify the final committed HEAD is clean and rerun all canonical gates after the last
-documentation/commit edit. Then dispatch the guarded NeuralWatt read-only runner on
-that exact commit with pre/post HEAD, branch, index, and status fingerprints. A timeout,
-mutation, or missing final verdict is no-verdict; a genuine REJECT becomes the next
-repair package. Do not push, publish, create a PR/release, upload a package, write
+The network-classification package is accepted and closed. Select one bounded package
+from the open inventory; the current highest-priority candidate is the rate/request-
+size/concurrency half of `[Coding-Solo#97]`. Begin with repository evidence and a
+focused failing behavioral test; preserve the five closed-list profiles and all 158
+tool contracts. Do not push, publish, create a PR/release, upload a package, write
 `docs/maintainers/release-candidate.md`, or send the candidate-ready notification.
