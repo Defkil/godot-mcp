@@ -51,6 +51,12 @@ import {
 } from './security/capability-policy.js';
 import { capabilityForLegacyTool } from './security/legacy-capabilities.js';
 import {
+  RequestLimiter,
+  RequestTooLargeError,
+  RateLimitExceededError,
+  parseRequestLimiterFromEnvironment,
+} from './security/request-limiter.js';
+import {
   BoundedLineBuffer,
   LaunchError,
   observeStartup,
@@ -162,6 +168,7 @@ export interface GodotServerConfig {
   runtimeConnectInitialDelayMs?: number;
   registerSignalHandlers?: boolean;
   capabilityPolicy?: CapabilityPolicy;
+  requestLimiter?: RequestLimiter;
 }
 
 /**
@@ -201,6 +208,7 @@ export class GodotServer {
   private readonly runtimeConnector?: (projectPath: string) => Promise<void>;
   private readonly runtimeConnectInitialDelayMs: number;
   private readonly capabilityPolicy: CapabilityPolicy;
+  private readonly requestLimiter: RequestLimiter;
   private gameConnection: GameConnection = {
     bridgeClient: null,
     connected: false,
@@ -219,6 +227,7 @@ export class GodotServer {
     this.runtimeConnector = config?.runtimeConnector;
     this.runtimeConnectInitialDelayMs = config?.runtimeConnectInitialDelayMs ?? 2000;
     this.capabilityPolicy = config?.capabilityPolicy ?? resolveCapabilityPolicyFromEnvironment();
+    this.requestLimiter = config?.requestLimiter ?? parseRequestLimiterFromEnvironment();
     this.toolRegistry.setCapabilityCheck((name, capability) =>
       this.capabilityPolicy.assertAllowed(name, capability),
     );
@@ -3457,6 +3466,35 @@ export class GodotServer {
         const message = error instanceof Error ? error.message : 'Invalid tool path arguments.';
         return createErrorResponse(`Path policy rejected ${request.params.name}: ${message}`);
       }
+      // Request-size, concurrency, and per-tool rate guards run *before* the
+      // capability check so a flood of oversized requests cannot bypass the
+      // more expensive profile lookup. They apply uniformly to both the
+      // registry dispatch path and the legacy case-statement path.
+      let releaseConcurrency: (() => void) | undefined;
+      try {
+        this.requestLimiter.assertRequestSize(
+          request.params.name,
+          request.params.arguments as Record<string, unknown> | undefined,
+        );
+        releaseConcurrency = this.requestLimiter.acquireConcurrency(request.params.name);
+        this.requestLimiter.consumeToken(request.params.name);
+      } catch (error) {
+        if (releaseConcurrency) releaseConcurrency();
+        if (error instanceof RequestTooLargeError) {
+          console.error(
+            `[SERVER] Request too large: ${request.params.name} (${(error as RequestTooLargeError).size} > ${(error as RequestTooLargeError).maxBytes} bytes)`,
+          );
+          return createErrorResponse((error as RequestTooLargeError).remediation);
+        }
+        if (error instanceof RateLimitExceededError) {
+          const rateError = error as RateLimitExceededError;
+          console.error(
+            `[SERVER] Rate limit exceeded: ${request.params.name} (${rateError.kind} limit ${rateError.limit})`,
+          );
+          return createErrorResponse(rateError.remediation);
+        }
+        throw error;
+      }
       try {
         if (this.toolRegistry.has(request.params.name)) {
           return await this.toolRegistry.dispatch(
@@ -3477,6 +3515,7 @@ export class GodotServer {
         }
         throw error;
       }
+      try {
       switch (request.params.name) {
     case 'run_project':
       return await this.handleRunProject(request.params.arguments);
@@ -3803,6 +3842,9 @@ export class GodotServer {
         `Unknown tool: ${request.params.name}`
       );
     }
+      } finally {
+        releaseConcurrency?.();
+      }
     });
   }
 
