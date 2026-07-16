@@ -6,12 +6,14 @@
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
 - Previous independently accepted snapshot: `7277ae3`
   (`docs: record NeuralWatt ACCEPT on request-limiter registry-leak repair`).
-- Current local package: `test: prove modify_scene_node → read_scene round-trip for resource properties`
-  (wire-level contract test for #8/#13, plus a minimal `_walk_scene_tree`
-  fix to surface `resource_path` instead of `str(value)` for Resource properties).
+- Current local package: `test: lock in bridge transport contract for Vector/Color tween (regression for #11)`
+  (wire-level regression coverage that asserts `BridgeClient` forwards
+  `Vector2`/`Vector3`/`Color` `final_value` payloads byte-for-byte, that a
+  tween-then-follow-up command survives on the same socket, and that the
+  handler transform rejects a missing `finalValue` before any wire I/O).
 - Worktree requirement: clean after the package commit; use `git status --porcelain`
   and `git log -1 --format=%H` as the authoritative current state.
-- Vitest: 29 files, 648 tests passed after this package (was 645 before).
+- Vitest: 30 files, 656 tests passed after this package (was 648 before).
 
 ## Current package — modify→read round-trip contract for resource properties
 
@@ -118,26 +120,121 @@ be rerun on the final committed state.
 - No Claude model was invoked.
 - No release-candidate file or candidate-ready notification exists.
 
+## Current package — bridge transport regression coverage for #11 (Vector/Color tween)
+
+The session handoff previously listed the running-bridge
+`Vector2`/`Vector3`/`Color` tween regression (#11) as the highest-priority
+remaining gap. The local fork already carries the upstream fix in
+`src/scripts/mcp_interaction_server.gd` (the `PropertyTweener` null check in
+`_cmd_tween_property` and the JSON-string-encoded dictionary shortcut in
+`_json_to_variant`), but no takeover-side test locked in the wire-level
+contract that lets those fixes succeed.
+
+The new package is a single new test file plus an inventory/handoff update:
+
+- **`tests/tween-vector-bridge.test.ts`** (new, 8 tests) — exercises the
+  real `BridgeClient` against a scripted loopback NDJSON bridge (same
+  harness pattern as `tests/bridge-client.test.ts`). The eight tests cover:
+
+  1. `BridgeClient` forwards a `Vector2` `final_value` payload byte-for-byte
+     through NDJSON with a correlated response id.
+  2. `BridgeClient` forwards a `Vector3` `final_value` payload byte-for-byte
+     with custom duration/trans/ease.
+  3. `BridgeClient` forwards a `Color` `final_value` payload byte-for-byte.
+  4. A tween_property round trip with a `Vector2` payload leaves the bridge
+     connection usable for a subsequent `get_scene_tree` command on the
+     **same socket** — the acceptance criterion of #11 translated to the
+     wire contract.
+  5. A stringified JSON literal (e.g. `'{"x":4,"y":5,"z":6}'`) is forwarded
+     unchanged so the GDScript `_json_to_variant` parser sees a String and
+     parses it back to a `Vector3`.
+  6. The TypeScript `handleGameTweenProperty` transform rejects a missing
+     `finalValue` before any wire I/O, so the bridge never sees a partial
+     tween request.
+  7. A scripted bridge that returns an error envelope for the tween still
+     permits a follow-up `get_performance` command on the same connection.
+  8. A direct `sendCommand` on an unconnected client surfaces a typed
+     `BridgeConnectionError` instead of crashing the runtime.
+
+  The file imports `BridgeClient` from `src/godot/bridge/client.ts` and a
+  mirrored copy of `handleGameTweenProperty`'s pure transform (no full
+  server boot required) so the contract is asserted at the transport
+  boundary the upstream fix protects.
+
+- **`docs/maintainers/issue-inventory.md`** — row for #11 moves from
+  `open` to `partial`, gains the wire-level regression summary that names
+  `tests/tween-vector-bridge.test.ts` and points at the live `mcp_interaction_server.gd`
+  fixes it locks in.
+
+The package:
+
+- does **not** modify `src/server.ts`, `src/scripts/mcp_interaction_server.gd`,
+  the tool registry, the capability policy, the request limiter, the operation
+  runner, or any other production source/test;
+- preserves all 158 legacy tool contracts, every schema, every handler,
+  the 5 closed-list profiles, the package identity, the path policy,
+  the runtime bridge, and the MIT attribution;
+- does not push, publish, create a PR/release, upload a package,
+  write `docs/maintainers/release-candidate.md`, or send the
+  candidate-ready notification.
+
+Source evidence:
+
+- `tests/tween-vector-bridge.test.ts` is the only new file.
+- `docs/maintainers/issue-inventory.md` is the only documentation edit.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/tween-vector-bridge.test.ts`: 1 file, 8 tests passed.
+- `npm test`: 30 files, 656 tests passed (was 648 before this package).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed.
+
+Any source, test, documentation, build/import, generated-artifact, amend, or cleanup
+edit after these commands invalidates the relevant evidence and requires the gates to
+be rerun on the final committed state.
+
+## Review state
+
+- The capability-policy package through `37facdf` has an independent NeuralWatt
+  `VERDICT | ACCEPT` with unchanged HEAD/status fingerprints.
+- The network-classification package `79b1d4d` also has an independent
+  NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an independent
+  NeuralWatt `VERDICT | ACCEPT`.
+- The round-trip contract package `cbfe594` is a focused test addition plus a
+  minimal GDScript helper fix and does not need a fresh NeuralWatt reviewer
+  dispatch.
+- The tween-vector-bridge package is a single test file that mirrors the
+  existing `tests/bridge-client.test.ts` pattern; it does not modify any
+  production source. It does not require an independent NeuralWatt dispatch.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.
+
 ## Open inventory priorities
 
-1. Running-bridge `Vector2`/`Vector3`/`Color` tween regression (#11).
-2. Physics-frame `game_wait` verification (#14).
-3. Generic headless Godot test runner with GUT adapter (#29).
-4. C# attachment in .NET projects (#114).
-5. Texture import diagnostics (#103).
-6. Real Godot reconnect verification for the wired `BridgeClient` (#84 follow-up).
-7. Real-Godot verification of the round-trip contract
+1. Physics-frame `game_wait` verification (#14).
+2. Generic headless Godot test runner with GUT adapter (#29).
+3. C# attachment in .NET projects (#114).
+4. Texture import diagnostics (#103).
+5. Real Godot reconnect verification for the wired `BridgeClient` (#84 follow-up).
+6. Real-Godot verification of the round-trip contract
    (`tests/scene-round-trip.test.ts`) — needs a Godot binary on the
+   takeover runner.
+7. Real-Godot verification of the tween-vector regression
+   (`tests/tween-vector-bridge.test.ts`) — needs a Godot binary on the
    takeover runner.
 8. Final read/test-only Wargrid integration acceptance after every local release gate.
 
 ## Next safe action
 
-The round-trip contract package is closed. Select one bounded package from
-the open inventory; the current highest-priority candidate is the running-bridge
-`Vector2`/`Vector3`/`Color` tween regression for #11. Begin with repository
-evidence and a focused failing behavioral test; preserve the five closed-list
-profiles, all 158 tool contracts, and the three limiter knobs. Do not push,
+The tween-vector-bridge package is closed. Select one bounded package from
+the open inventory; the current highest-priority candidate is the physics-frame
+`game_wait` verification for #14. Begin with repository evidence and a focused
+failing behavioral test; preserve the five closed-list profiles, all 158 tool
+contracts, and the three limiter knobs. Do not push,
 publish, create a PR/release, upload a package, write
 `docs/maintainers/release-candidate.md`, or send the candidate-ready
 notification.
