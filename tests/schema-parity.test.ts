@@ -31,9 +31,11 @@ describe('MCP schema and dispatch parity', () => {
     expect(new Set(names).size).toBe(157);
     expect(names.filter((name: string) => name === 'list_project_files')).toHaveLength(1);
     expect(names.filter((name: string) => name === 'modify_project_settings')).toHaveLength(1);
+    expect(names.filter((name: string) => name === 'launch_editor')).toHaveLength(1);
     expect((server as any).toolRegistry.definitions().map((tool: { name: string }) => tool.name))
-      .toEqual(['modify_project_settings', 'list_project_files']);
+      .toEqual(['modify_project_settings', 'list_project_files', 'launch_editor']);
     expect((server as any).toolRegistry.capabilityFor('modify_project_settings')).toBe('edit');
+    expect((server as any).toolRegistry.capabilityFor('launch_editor')).toBe('runtime');
   });
 
   it('executes the migrated project-settings mutation through the real MCP call boundary', async () => {

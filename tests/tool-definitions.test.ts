@@ -108,7 +108,11 @@ describe('Tool definitions', () => {
   });
 
   it('legacy switch handles every tool not yet migrated to the registry', () => {
-    const migratedTools = new Set(['modify_project_settings', 'list_project_files']);
+    const migratedTools = new Set([
+      'modify_project_settings',
+      'list_project_files',
+      'launch_editor',
+    ]);
     for (const name of ALL_TOOL_NAMES) {
       if (!migratedTools.has(name)) expect(sourceCode).toContain(`case '${name}':`);
     }

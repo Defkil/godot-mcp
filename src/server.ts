@@ -59,6 +59,7 @@ import {
   HeadlessOperationError,
   runHeadlessOperation,
 } from './godot/operation-runner.js';
+import { launchEditor } from './tools/editor/launch-editor.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -861,23 +862,26 @@ export class GodotServer {
       handler: args => this.handleListProjectFiles(args),
     });
 
+    this.toolRegistry.register({
+      name: 'launch_editor',
+      description: 'Launch Godot editor for a specific project',
+      capability: 'runtime',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Godot project path',
+          },
+        },
+        required: ['projectPath'],
+      },
+      handler: args => this.handleLaunchEditor(args),
+    });
+
     // Define available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
-        {
-          name: 'launch_editor',
-          description: 'Launch Godot editor for a specific project',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Godot project path',
-              },
-            },
-            required: ['projectPath'],
-          },
-        },
         {
           name: 'run_project',
           description: 'Run the Godot project and capture output',
@@ -3315,8 +3319,6 @@ export class GodotServer {
         );
       }
       switch (request.params.name) {
-        case 'launch_editor':
-          return await this.handleLaunchEditor(request.params.arguments);
         case 'run_project':
           return await this.handleRunProject(request.params.arguments);
         case 'get_debug_output':
@@ -3654,65 +3656,45 @@ export class GodotServer {
 
   /**
    * Handle the launch_editor tool
+   *
+   * The actual launch + startup observation lives in
+   * `src/tools/editor/launch-editor.ts`. This wrapper normalises parameters,
+   * resolves the Godot executable, and converts any thrown error into a
+   * structured MCP error response. Truthful diagnostics (process exit code,
+   * stderr patterns, retained stderr lines) flow back through the inner
+   * module's `LaunchError`, so the tool never returns an optimistic success
+   * envelope when Godot fails to start or reports a parse/launch failure.
    * @param args Tool arguments
    */
   private async handleLaunchEditor(args: any) {
-    // Normalize parameters to camelCase
-    args = normalizeParameters(args);
+    const normalised = normalizeParameters(args || {});
+    const projectPath = typeof normalised.projectPath === 'string'
+      ? normalised.projectPath
+      : '';
 
-    if (!args.projectPath) {
-      return createErrorResponse(
-        'Project path is required'
-      );
-    }
-
-    if (!validatePath(args.projectPath)) {
-      return createErrorResponse(
-        'Invalid project path'
-      );
+    if (!projectPath) {
+      return createErrorResponse('projectPath is required.');
     }
 
     try {
-      // Ensure godotPath is set
       if (!this.godotPath) {
         await this.detectGodotPath();
-        if (!this.godotPath) {
-          return createErrorResponse(
-            'Could not find a valid Godot executable path'
-          );
-        }
+      }
+      if (!this.godotPath) {
+        return createErrorResponse('Could not find a valid Godot executable path.');
       }
 
-      // Check if the project directory exists and contains a project.godot file
-      const projectFile = join(args.projectPath, 'project.godot');
-      if (!existsSync(projectFile)) {
-        return createErrorResponse(
-          `Not a valid Godot project: ${args.projectPath}`
-        );
-      }
-
-      this.logDebug(`Launching Godot editor for project: ${args.projectPath}`);
-      const process = spawn(this.godotPath, ['-e', '--path', args.projectPath], {
-        stdio: 'pipe',
+      this.logDebug(`Launching Godot editor for project: ${projectPath}`);
+      const result = await launchEditor({
+        projectPath,
+        godotPath: this.godotPath,
+        pathPolicy: this.pathPolicy,
+        spawn: this.spawnProcess,
       });
-
-      process.on('error', (err: Error) => {
-        console.error('Failed to start Godot editor:', err);
-      });
-
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Godot editor launched successfully for project at ${args.projectPath}.`,
-          },
-        ],
-      };
+      return result;
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      return createErrorResponse(
-        `Failed to launch Godot editor: ${errorMessage}`
-      );
+      return createErrorResponse(`Failed to launch Godot editor: ${errorMessage}`);
     }
   }
 

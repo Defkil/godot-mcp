@@ -1055,7 +1055,7 @@ describe('Lifecycle handlers', () => {
 
   it('handleRunProject exists and spawns process', () => {
     expect(sourceCode).toContain('handleRunProject');
-    expect(sourceCode).toContain('spawn(');
+    expect(sourceCode).toContain('spawnProcess(');
   });
 
   it('handleStopProject exists and kills process', () => {
@@ -1932,7 +1932,7 @@ describe('Tool dispatch routing', () => {
   it('routes every remaining legacy case to a handler', () => {
     const caseRegex = /case '(\w+)':\s*\n\s*return await this\.handle/g;
     const matches = [...sourceCode.matchAll(caseRegex)];
-    expect(matches.length).toBe(155);
+    expect(matches.length).toBe(154);
   });
 
   it('does not let a legacy case fall through', () => {
