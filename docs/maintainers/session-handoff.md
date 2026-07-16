@@ -6,21 +6,24 @@
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
 - Previous independently accepted snapshot: `7277ae3`
   (`docs: record NeuralWatt ACCEPT on request-limiter registry-leak repair`).
-- Previous committed package: `test: lock in bridge transport contract for Vector/Color tween (regression for #11)`
-  (wire-level regression coverage that asserts `BridgeClient` forwards
-  `Vector2`/`Vector3`/`Color` `final_value` payloads byte-for-byte, that a
-  tween-then-follow-up command survives on the same socket, and that the
-  handler transform rejects a missing `finalValue` before any wire I/O).
-- Current local package: `test: lock in physics-frame game_wait wire contract (regression for #14)`
+- Previous committed package: `test: lock in physics-frame game_wait wire contract (regression for #14)`
   (wire-level regression coverage that asserts `BridgeClient` forwards
   `frameType:"physics"` byte-for-byte as `frame_type:"physics"`, that
   `frameType` and `frames` defaults resolve at the transform boundary,
   that the bridge socket survives a wait-then-follow-up flow, and that
   the GDScript `_cmd_wait` source still contains both `physics_frame` and
   `process_frame` branches).
+- Current local package: `fix: gate attach_script C# scripts against non-.NET projects (regression for #114)`
+  (typed-error gate in `handleAttachScript` that rejects `scriptPath`
+  ending in anything other than `.gd` or `.cs`, and rejects `.cs` against
+  a project without a `.csproj` on disk using the same diagnostic
+  `create_csharp_script` already uses; new wire-level coverage in
+  `tests/attach-script-dotnet-gate.test.ts` exercises both branches
+  through the real MCP `tools/call` boundary with a stubbed
+  `executeOperation`).
 - Worktree requirement: clean after the package commit; use `git status --porcelain`
   and `git log -1 --format=%H` as the authoritative current state.
-- Vitest: 31 files, 668 tests passed after this package (was 656 before).
+- Vitest: 32 files, 672 tests passed after this package (was 668 before).
 
 ## Current package — modify→read round-trip contract for resource properties
 
@@ -331,7 +334,10 @@ be rerun on the final committed state.
 ## Open inventory priorities
 
 1. Generic headless Godot test runner with GUT adapter (#29).
-2. C# attachment in .NET projects (#114).
+2. Real-Godot verification of the `attach_script` C# / .NET round-trip
+   (`tests/attach-script-dotnet-gate.test.ts`) — needs a Godot binary on
+   the takeover runner that can build a .NET project and exercise
+   `set_script` on a C# script.
 3. Texture import diagnostics (#103).
 4. Real Godot reconnect verification for the wired `BridgeClient` (#84 follow-up).
 5. Real-Godot verification of the round-trip contract
@@ -341,17 +347,17 @@ be rerun on the final committed state.
    (`tests/tween-vector-bridge.test.ts`) — needs a Godot binary on the
    takeover runner.
 7. Real-Godot verification of the physics-frame `game_wait` regression
-   (`tests/game-wait-frame-bridge.test.ts`) — needs a Godot binary on the
-   takeover runner.
+   (`tests/game-wait-frame-bridge.test.ts`) — needs a Godot binary on
+   the takeover runner.
 8. Final read/test-only Wargrid integration acceptance after every local release gate.
 
 ## Next safe action
 
-The physics-frame `game_wait` package (#14) is closed. Select one bounded
-package from the open inventory; the current highest-priority candidate
-is the generic headless Godot test runner with GUT adapter (#29), which
-unblocks the real-Godot verification lanes for the round-trip, tween,
-and physics-frame regressions at once. Begin with repository evidence
+The `attach_script` C# / .NET gate package (#114) is closed at the typed
+error boundary; the next safe action remains the generic headless Godot
+test runner with GUT adapter (#29), which unblocks the real-Godot
+verification lanes for the round-trip, tween, physics-frame, and the
+new C# round-trip regressions at once. Begin with repository evidence
 and a focused failing behavioral test; preserve the five closed-list
 profiles, all 158 tool contracts, and the three limiter knobs. Do not
 push, publish, create a PR/release, upload a package, write

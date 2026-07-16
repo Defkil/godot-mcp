@@ -5185,6 +5185,17 @@ export class GodotServer {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.scenePath || !args.nodePath || !args.scriptPath)
       return createErrorResponse('projectPath, scenePath, nodePath, and scriptPath are required.');
+    // Script-kind / project-kind gate (closes Coding-Solo#114). The matching
+    // create_csharp_script handler already rejects .cs scripts on a non-.NET
+    // project; attach_script silently forwarded every script path to the
+    // Godot operation, which then no-op'd on .cs files outside .NET projects
+    // (and warned on .gd files inside an unbuilt .NET project). Reject with
+    // the same diagnostic create_csharp_script uses so both tools share a
+    // single truth.
+    if (!/\.(gd|cs)$/i.test(args.scriptPath))
+      return createErrorResponse('attach_script scriptPath must end with .gd or .cs');
+    if (/\.cs$/i.test(args.scriptPath) && !this.isDotnetProject(args.projectPath))
+      return createErrorResponse('Not a Godot .NET project (no .csproj found). Use create_project with dotnet: true first.');
     return this.headlessOp('attach_script', args, a => ({
       projectPath: a.projectPath,
       params: { scenePath: a.scenePath, nodePath: a.nodePath, scriptPath: a.scriptPath },
