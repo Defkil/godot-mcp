@@ -32,9 +32,22 @@ describe('MCP schema and dispatch parity', () => {
     expect(names.filter((name: string) => name === 'list_project_files')).toHaveLength(1);
     expect(names.filter((name: string) => name === 'modify_project_settings')).toHaveLength(1);
     expect(names.filter((name: string) => name === 'launch_editor')).toHaveLength(1);
+    expect(names.filter((name: string) => name === 'read_scene')).toHaveLength(1);
+    expect(names.filter((name: string) => name === 'modify_scene_node')).toHaveLength(1);
+    expect(names.filter((name: string) => name === 'remove_scene_node')).toHaveLength(1);
     expect((server as any).toolRegistry.definitions().map((tool: { name: string }) => tool.name))
-      .toEqual(['modify_project_settings', 'list_project_files', 'launch_editor']);
+      .toEqual([
+        'modify_project_settings',
+        'list_project_files',
+        'launch_editor',
+        'read_scene',
+        'modify_scene_node',
+        'remove_scene_node',
+      ]);
     expect((server as any).toolRegistry.capabilityFor('modify_project_settings')).toBe('edit');
+    expect((server as any).toolRegistry.capabilityFor('modify_scene_node')).toBe('edit');
+    expect((server as any).toolRegistry.capabilityFor('remove_scene_node')).toBe('edit');
+    expect((server as any).toolRegistry.capabilityFor('read_scene')).toBe('inspect');
     expect((server as any).toolRegistry.capabilityFor('launch_editor')).toBe('runtime');
   });
 

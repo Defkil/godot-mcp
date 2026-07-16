@@ -1095,8 +1095,12 @@ describe('Lifecycle handlers', () => {
 
   it('handleReadScene extracts JSON from markers', () => {
     expect(sourceCode).toContain('handleReadScene');
-    expect(sourceCode).toContain('SCENE_JSON_START');
-    expect(sourceCode).toContain('SCENE_JSON_END');
+    const moduleSource = readFileSync(
+      join(__dirname, '..', 'src', 'tools', 'scene', 'read-scene.ts'),
+      'utf8',
+    );
+    expect(moduleSource).toContain('SCENE_JSON_START');
+    expect(moduleSource).toContain('SCENE_JSON_END');
   });
 
   it('handleReadProjectSettings parses INI-style sections', () => {
@@ -1932,7 +1936,11 @@ describe('Tool dispatch routing', () => {
   it('routes every remaining legacy case to a handler', () => {
     const caseRegex = /case '(\w+)':\s*\n\s*return await this\.handle/g;
     const matches = [...sourceCode.matchAll(caseRegex)];
-    expect(matches.length).toBe(154);
+    // Subtract the three headless scene tools migrated to the tool registry
+    // (`read_scene`, `modify_scene_node`, `remove_scene_node`) which now
+    // resolve through the registry dispatch path and no longer appear as
+    // legacy `case` statements. The previous count was 154.
+    expect(matches.length).toBe(151);
   });
 
   it('does not let a legacy case fall through', () => {

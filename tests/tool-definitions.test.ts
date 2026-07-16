@@ -112,6 +112,9 @@ describe('Tool definitions', () => {
       'modify_project_settings',
       'list_project_files',
       'launch_editor',
+      'read_scene',
+      'modify_scene_node',
+      'remove_scene_node',
     ]);
     for (const name of ALL_TOOL_NAMES) {
       if (!migratedTools.has(name)) expect(sourceCode).toContain(`case '${name}':`);

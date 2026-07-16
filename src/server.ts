@@ -60,12 +60,46 @@ import {
   runHeadlessOperation,
 } from './godot/operation-runner.js';
 import { launchEditor } from './tools/editor/launch-editor.js';
+import {
+  modifySceneNode,
+  validateModifySceneNodeInput,
+} from './tools/scene/modify-scene-node.js';
+import {
+  removeSceneNode,
+  validateRemoveSceneNodeInput,
+} from './tools/scene/remove-scene-node.js';
+import {
+  readScene,
+  validateReadSceneInput,
+} from './tools/scene/read-scene.js';
+import {
+  SceneOperationPostconditionError,
+  type SceneOperationResult,
+  type SceneOperationRunner,
+  type SceneToolContext,
+} from './tools/scene/_shared.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
 const GODOT_DEBUG_MODE: boolean = true; // Always use GODOT DEBUG MODE
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Convert an error thrown by one of the focused scene tool modules into a
+ * typed MCP error response. Used by every thin `handleX` wrapper registered
+ * with the tool registry so that validation errors, postcondition failures,
+ * and PathPolicy rejections all surface as a single `isError: true` envelope
+ * without leaking the module name to the caller.
+ */
+function createToolModuleErrorResponse(toolName: string, error: unknown): { content: Array<{ type: 'text'; text: string }>; isError: true } {
+  const detail = error instanceof SceneOperationPostconditionError
+    ? `${error.message}\n\nOperation: ${error.operation}\nRecorded failures:\n- ${error.errors.map(entry => String(entry)).join('\n- ')}`
+    : error instanceof Error
+      ? error.message
+      : 'Unknown error';
+  return createErrorResponse(`${toolName} failed: ${detail}`);
+}
 
 // Derive __filename and __dirname in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -630,11 +664,27 @@ export class GodotServer {
   /**
    * @returns The bounded diagnostics and typed success result from the operation
    */
+  /**
+   * Execute a Godot headless operation and return its bounded output together
+   * with the typed result marker. The result envelope accepts both a healthy
+   * `status: ok` payload (the historical contract) and the typed `status:
+   * error` envelope emitted by `godot_operations.gd` when an operation
+   * recorded postcondition failures. Existing handlers that only read
+   * `stdout` continue to work unchanged; the focused scene tool modules in
+   * `src/tools/scene/` inspect the envelope to surface typed postcondition
+   * errors instead of returning an optimistic success response.
+   */
   private async executeOperation(
     operation: string,
     params: OperationParams,
     projectPath: string
-  ): Promise<{ stdout: string; stderr: string; result: { operation: string; status: 'ok' } }> {
+  ): Promise<{
+    stdout: string;
+    stderr: string;
+    result:
+      | { operation: string; status: 'ok' }
+      | { operation: string; status: 'error'; errors?: unknown[] };
+  }> {
     this.logDebug(`Executing operation: ${operation} in project: ${projectPath}`);
     this.logDebug(`Original operation params: ${JSON.stringify(params)}`);
 
@@ -650,7 +700,10 @@ export class GodotServer {
     }
 
     try {
-      const execution = await runHeadlessOperation<{ operation: string; status: 'ok' }>({
+      const execution = await runHeadlessOperation<
+        | { operation: string; status: 'ok' }
+        | { operation: string; status: 'error'; errors?: unknown[] }
+      >({
         godotPath: this.godotPath,
         projectPath,
         scriptPath: this.operationsScriptPath,
@@ -661,12 +714,23 @@ export class GodotServer {
           if (
             !value ||
             typeof value !== 'object' ||
-            (value as { operation?: unknown }).operation !== operation ||
-            (value as { status?: unknown }).status !== 'ok'
+            (value as { operation?: unknown }).operation !== operation
           ) {
-            throw new Error(`Expected a successful result for operation ${operation}.`);
+            throw new Error(`Expected a result envelope for operation ${operation}.`);
           }
-          return value as { operation: string; status: 'ok' };
+          const status = (value as { status?: unknown }).status;
+          if (status === 'ok') {
+            return value as { operation: string; status: 'ok' };
+          }
+          if (status === 'error') {
+            const errors = (value as { errors?: unknown }).errors;
+            return {
+              operation,
+              status: 'error',
+              errors: Array.isArray(errors) ? errors : [],
+            };
+          }
+          throw new Error(`Expected status 'ok' or 'error' for operation ${operation}.`);
         },
       });
 
@@ -684,6 +748,34 @@ export class GodotServer {
       throw error;
     }
   }
+
+  /**
+   * Build the context the focused scene tool modules need. The runner is the
+   * shared headless-execution primitive (`executeOperation`) which already
+   * validates path roots, normalises parameters and parses the typed Godot
+   * result marker. Tests exercise the modules directly with stub runners, so
+   * the modules themselves never depend on the full `GodotServer` instance.
+   */
+  private sceneToolContext(): SceneToolContext {
+          const runner: SceneOperationRunner = {
+            run: async (operation, params, projectPath) => {
+              const executed = await this.executeOperation(
+                operation,
+                params as OperationParams,
+                projectPath,
+              );
+              return {
+                stdout: executed.stdout,
+                stderr: executed.stderr,
+                result: executed.result as SceneOperationResult['result'],
+              };
+            },
+          };
+          return {
+            pathPolicy: this.pathPolicy,
+            operationRunner: runner,
+          };
+        }
 
   /**
    * Get the structure of a Godot project
@@ -877,6 +969,81 @@ export class GodotServer {
         required: ['projectPath'],
       },
       handler: args => this.handleLaunchEditor(args),
+    });
+
+    this.toolRegistry.register({
+      name: 'read_scene',
+      description: 'Read scene file as JSON node tree (headless)',
+      capability: 'inspect',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Godot project path',
+          },
+          scenePath: {
+            type: 'string',
+            description: 'Scene file path (relative to project)',
+          },
+        },
+        required: ['projectPath', 'scenePath'],
+      },
+      handler: args => this.handleReadScene(args),
+    });
+
+    this.toolRegistry.register({
+      name: 'modify_scene_node',
+      description: 'Modify node properties in a scene file (headless)',
+      capability: 'edit',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Godot project path',
+          },
+          scenePath: {
+            type: 'string',
+            description: 'Scene file path (relative to project)',
+          },
+          nodePath: {
+            type: 'string',
+            description: 'Path to the node within the scene (e.g., "root/Player/Sprite2D")',
+          },
+          properties: {
+            type: 'object',
+            description: 'Properties to set on the node as key-value pairs',
+          },
+        },
+        required: ['projectPath', 'scenePath', 'nodePath', 'properties'],
+      },
+      handler: args => this.handleModifySceneNode(args),
+    });
+
+    this.toolRegistry.register({
+      name: 'remove_scene_node',
+      description: 'Remove a node from a scene file (headless)',
+      capability: 'edit',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Godot project path',
+          },
+          scenePath: {
+            type: 'string',
+            description: 'Scene file path (relative to project)',
+          },
+          nodePath: {
+            type: 'string',
+            description: 'Path to the node to remove (e.g., "root/Player/OldNode")',
+          },
+        },
+        required: ['projectPath', 'scenePath', 'nodePath'],
+      },
+      handler: args => this.handleRemoveSceneNode(args),
     });
 
     // Define available tools
@@ -1400,72 +1567,6 @@ export class GodotServer {
               },
             },
             required: [],
-          },
-        },
-{
-          name: 'read_scene',
-          description: 'Read scene file as JSON node tree (headless)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Godot project path',
-              },
-              scenePath: {
-                type: 'string',
-                description: 'Scene file path (relative to project)',
-              },
-            },
-            required: ['projectPath', 'scenePath'],
-          },
-        },
-        {
-          name: 'modify_scene_node',
-          description: 'Modify node properties in a scene file (headless)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Godot project path',
-              },
-              scenePath: {
-                type: 'string',
-                description: 'Scene file path (relative to project)',
-              },
-              nodePath: {
-                type: 'string',
-                description: 'Path to the node within the scene (e.g., "root/Player/Sprite2D")',
-              },
-              properties: {
-                type: 'object',
-                description: 'Properties to set on the node as key-value pairs',
-              },
-            },
-            required: ['projectPath', 'scenePath', 'nodePath', 'properties'],
-          },
-        },
-        {
-          name: 'remove_scene_node',
-          description: 'Remove a node from a scene file (headless)',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Godot project path',
-              },
-              scenePath: {
-                type: 'string',
-                description: 'Scene file path (relative to project)',
-              },
-              nodePath: {
-                type: 'string',
-                description: 'Path to the node to remove (e.g., "root/Player/OldNode")',
-              },
-            },
-            required: ['projectPath', 'scenePath', 'nodePath'],
           },
         },
 {
@@ -3380,13 +3481,6 @@ export class GodotServer {
           return await this.handleGamePerformance();
         case 'game_wait':
           return await this.handleGameWait(request.params.arguments);
-        // Headless scene tools
-        case 'read_scene':
-          return await this.handleReadScene(request.params.arguments);
-        case 'modify_scene_node':
-          return await this.handleModifySceneNode(request.params.arguments);
-        case 'remove_scene_node':
-          return await this.handleRemoveSceneNode(request.params.arguments);
         // Project management tools
         case 'read_project_settings':
           return await this.handleReadProjectSettings(request.params.arguments);
@@ -4675,82 +4769,46 @@ export class GodotServer {
 
 
   /**
-   * Handle the read_scene tool - Read a scene file structure
+   * Handle the read_scene tool - thin wrapper around the focused
+   * `src/tools/scene/read-scene.ts` module.
    */
   private async handleReadScene(args: any) {
-    args = normalizeParameters(args || {});
-    if (!args.projectPath || !args.scenePath) {
-      return createErrorResponse('projectPath and scenePath are required.');
-    }
-
-    if (!validatePath(args.projectPath) || !validatePath(args.scenePath)) {
-      return createErrorResponse('Invalid path.');
-    }
-
-    const projectFile = join(args.projectPath, 'project.godot');
-    if (!existsSync(projectFile)) {
-      return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
-    }
-
-    const scenePath = join(args.projectPath, args.scenePath);
-    if (!existsSync(scenePath)) {
-      return createErrorResponse(`Scene file does not exist: ${args.scenePath}`);
-    }
-
     try {
-      const { stdout, stderr } = await this.executeOperation('read_scene', {
-        scenePath: args.scenePath,
-      }, args.projectPath);
-
-      // Extract JSON from the SCENE_JSON_START/END markers
-      const startMarker = 'SCENE_JSON_START';
-      const endMarker = 'SCENE_JSON_END';
-      const startIdx = stdout.indexOf(startMarker);
-      const endIdx = stdout.indexOf(endMarker);
-
-      if (startIdx !== -1 && endIdx !== -1) {
-        const jsonStr = stdout.substring(startIdx + startMarker.length, endIdx).trim();
-        try {
-          const parsed = JSON.parse(jsonStr);
-          return {
-            content: [{ type: 'text', text: JSON.stringify(parsed, null, 2) }],
-          };
-        } catch {
-          return {
-            content: [{ type: 'text', text: `Raw scene data:\n${jsonStr}` }],
-          };
-        }
-      }
-
-      return {
-        content: [{ type: 'text', text: `Scene read output:\n${stdout}\n${stderr ? 'Errors:\n' + stderr : ''}` }],
-      };
-    } catch (error: any) {
-      return createErrorResponse(`Failed to read scene: ${error?.message || 'Unknown error'}`);
+      const input = validateReadSceneInput(normalizeParameters(args || {}));
+      return await readScene(input, this.sceneToolContext());
+    } catch (error) {
+      return createToolModuleErrorResponse('read_scene', error);
     }
   }
 
   /**
-   * Handle the modify_scene_node tool
+   * Handle the modify_scene_node tool - thin wrapper around the focused
+   * `src/tools/scene/modify-scene-node.ts` module. Successful operations
+   * always carry real GDScript acknowledgement; properties that the engine
+   * rejected (missing, wrong type, unresolvable resource) now flow back as
+   * a typed `SceneOperationPostconditionError` so the agent never receives
+   * a false-positive success envelope (Coding-Solo #13, tugcantopaloglu #8).
    */
   private async handleModifySceneNode(args: any) {
-    args = normalizeParameters(args || {});
-    if (!args.projectPath || !args.scenePath || !args.nodePath || !args.properties)
-      return createErrorResponse('projectPath, scenePath, nodePath, and properties are required.');
-    return this.headlessOp('modify_node', args, a => ({
-      projectPath: a.projectPath,
-      params: { scenePath: a.scenePath, nodePath: a.nodePath, properties: a.properties },
-    }));
+    try {
+      const input = validateModifySceneNodeInput(normalizeParameters(args || {}));
+      return await modifySceneNode(input, this.sceneToolContext());
+    } catch (error) {
+      return createToolModuleErrorResponse('modify_scene_node', error);
+    }
   }
 
+  /**
+   * Handle the remove_scene_node tool - thin wrapper around the focused
+   * `src/tools/scene/remove-scene-node.ts` module.
+   */
   private async handleRemoveSceneNode(args: any) {
-    args = normalizeParameters(args || {});
-    if (!args.projectPath || !args.scenePath || !args.nodePath)
-      return createErrorResponse('projectPath, scenePath, and nodePath are required.');
-    return this.headlessOp('remove_node', args, a => ({
-      projectPath: a.projectPath,
-      params: { scenePath: a.scenePath, nodePath: a.nodePath },
-    }));
+    try {
+      const input = validateRemoveSceneNodeInput(normalizeParameters(args || {}));
+      return await removeSceneNode(input, this.sceneToolContext());
+    } catch (error) {
+      return createToolModuleErrorResponse('remove_scene_node', error);
+    }
   }
 
 

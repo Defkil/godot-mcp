@@ -5,6 +5,17 @@ extends SceneTree
 # Debug mode flag
 var debug_mode = false
 
+# Operation postcondition errors. Individual operation functions append entries
+# (e.g. for a silent property set failure or a missing scene resource) without
+# aborting execution. After every operation, _init() converts these into a
+# typed "status: error" result marker so the runner surfaces them as
+# `invalid-result` failures instead of a false-positive success envelope.
+var _postcondition_errors: Array = []
+
+func _record_postcondition_failure(message: String) -> void:
+    printerr(message)
+    _postcondition_errors.append(message)
+
 func _init():
     var args = OS.get_cmdline_args()
     
@@ -96,7 +107,18 @@ func _init():
 
     # Every successful operation ends with one machine-readable result marker.
     # Human diagnostics remain separate so callers never infer success from text.
-    print("GODOT_MCP_RESULT=" + JSON.stringify({"operation": operation, "status": "ok"}))
+    # If any operation function recorded a postcondition failure (silent property
+    # set, missing resource, etc.), emit a typed "status: error" marker so the
+    # runner surfaces `invalid-result` instead of a false-positive success.
+    if _postcondition_errors.is_empty():
+        print("GODOT_MCP_RESULT=" + JSON.stringify({"operation": operation, "status": "ok"}))
+    else:
+        var error_payload = {
+            "operation": operation,
+            "status": "error",
+            "errors": _postcondition_errors.duplicate(),
+        }
+        print("GODOT_MCP_RESULT=" + JSON.stringify(error_payload))
     quit()
 
 # Logging functions
@@ -1306,7 +1328,14 @@ func _convert_property_value(node, prop_name, value):
                             var res = load(value)
                             if res != null:
                                 return res
-                        printerr("Failed to load resource from path: " + value)
+                            _record_postcondition_failure(
+                                "modify_scene_node: failed to load resource from '" + value + "' for property '" + prop_name + "'"
+                            )
+                            return null
+                        _record_postcondition_failure(
+                            "modify_scene_node: resource does not exist at path '" + value + "' for property '" + prop_name + "'"
+                        )
+                        return null
                     return value
             break
     return value
@@ -1447,13 +1476,28 @@ func modify_node(params):
         printerr("Node not found: " + params.node_path)
         quit(1)
 
-    # Set properties with type conversion
+    # Set properties with type conversion and capture each target.set() return value.
+    # target.set() returns false silently when the property does not exist, has the
+    # wrong type, or the new value is rejected; without this check, the operation
+    # would still print a success envelope for no-op writes (Coding-Solo #13).
     var properties = params.properties
-    for prop_name in properties:
-        var raw_value = properties[prop_name]
-        var converted_value = _convert_property_value(target, prop_name, raw_value)
-        log_info("Setting " + prop_name + " = " + str(converted_value) + " (from " + str(raw_value) + ")")
-        target.set(prop_name, converted_value)
+    if properties is Dictionary:
+        for prop_name in properties:
+            var raw_value = properties[prop_name]
+            var converted_value = _convert_property_value(target, prop_name, raw_value)
+            if converted_value == null and (raw_value is String) and (raw_value as String).begins_with("res://"):
+                # Already recorded by _convert_property_value; do not invoke set() with null.
+                continue
+            log_info("Setting " + prop_name + " = " + str(converted_value) + " (from " + str(raw_value) + ")")
+            var set_ok = target.set(prop_name, converted_value)
+            if not set_ok:
+                _record_postcondition_failure(
+                    "modify_scene_node: node '" + params.node_path + "' rejected property '" + prop_name + "' = " + str(converted_value)
+                )
+    else:
+        _record_postcondition_failure("modify_scene_node: 'properties' must be an object, got " + str(typeof(properties)))
+        quit(1)
+        return
 
     # Repack and save
     var packed_scene = PackedScene.new()
@@ -1507,7 +1551,20 @@ func remove_node(params):
         quit(1)
 
     var removed_name = target.name
-    target.get_parent().remove_child(target)
+    var parent = target.get_parent()
+    if parent == null:
+        _record_postcondition_failure(
+            "remove_scene_node: target node '" + params.node_path + "' has no parent and cannot be removed"
+        )
+        quit(1)
+        return
+    var children_before = parent.get_child_count()
+    parent.remove_child(target)
+    var children_after = parent.get_child_count()
+    if children_after >= children_before:
+        _record_postcondition_failure(
+            "remove_scene_node: parent still has the target node '" + removed_name + "' after remove_child"
+        )
     target.queue_free()
 
     # Repack and save
