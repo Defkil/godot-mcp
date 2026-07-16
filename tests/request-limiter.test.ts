@@ -290,4 +290,37 @@ describe('RequestLimiter at the MCP tools/call boundary', () => {
     expect(text).toMatch(/rate limit exceeded/i);
     expect(text).toContain('read_file');
   });
+
+  it('releases the concurrency slot on the registry-dispatch path so many sequential tool calls do not leak', async () => {
+    const { root } = makeProject();
+    // maxConcurrentRequests=1 makes any leaked slot visible: the second
+    // successful call would otherwise trip the concurrency gate forever.
+    const server = new GodotServer({
+      registerSignalHandlers: false,
+      godotPath: '/usr/bin/godot',
+      runtimeConnector: () => new Promise(() => undefined),
+      runtimeConnectInitialDelayMs: 5,
+      pathPolicy: new PathPolicy([root]),
+      capabilityPolicy: new CapabilityPolicy('legacy-full'),
+      requestLimiter: new RequestLimiter({
+        maxRequestBytes: 8 * 1024,
+        maxConcurrentRequests: 1,
+        ratePerMinute: 1000,
+      }),
+    });
+
+    const callTool = requestHandler(server, 'tools/call');
+    // `list_project_files` is registered through the tool registry (not the
+    // legacy switch). Five sequential calls would saturate inflight after
+    // one if the slot leaks on the registry-dispatch path.
+    const args = { projectPath: root };
+    for (let i = 0; i < 5; i += 1) {
+      const response = await callTool(
+        { method: 'tools/call', params: { name: 'list_project_files', arguments: args } },
+        {},
+      );
+      const text = JSON.stringify(response);
+      expect(text).not.toMatch(/rate limit exceeded/i);
+    }
+  });
 });

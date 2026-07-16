@@ -3495,6 +3495,11 @@ export class GodotServer {
         }
         throw error;
       }
+      // Single try/finally wraps BOTH the registry dispatch and the legacy
+      // switch so the request-limiter concurrency slot is released on every
+      // return path: registry success, registry throw, CapabilityDeniedError
+      // envelope, unknown-tool McpError, and legacy handler throw.
+      try {
       try {
         if (this.toolRegistry.has(request.params.name)) {
           return await this.toolRegistry.dispatch(
@@ -3515,7 +3520,6 @@ export class GodotServer {
         }
         throw error;
       }
-      try {
       switch (request.params.name) {
     case 'run_project':
       return await this.handleRunProject(request.params.arguments);
