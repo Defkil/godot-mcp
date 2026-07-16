@@ -4,94 +4,97 @@
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/senior-takeover`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Previous independently accepted snapshot: `70c10b6`
-  (`docs: record request-limiter package in handoff and issue inventory`).
-- Current local package: `fix: release request-limiter concurrency slot on the registry dispatch path`
-  (NeuralWatt ACCEPT on `9bc4a2d`).
+- Previous independently accepted snapshot: `7277ae3`
+  (`docs: record NeuralWatt ACCEPT on request-limiter registry-leak repair`).
+- Current local package: `test: prove modify_scene_node → read_scene round-trip for resource properties`
+  (wire-level contract test for #8/#13, plus a minimal `_walk_scene_tree`
+  fix to surface `resource_path` instead of `str(value)` for Resource properties).
 - Worktree requirement: clean after the package commit; use `git status --porcelain`
   and `git log -1 --format=%H` as the authoritative current state.
-- Vitest: 28 files, 645 tests passed after this package.
+- Vitest: 29 files, 648 tests passed after this package (was 645 before).
 
-## Current package — request-limiter at the MCP boundary (closed)
+## Current package — modify→read round-trip contract for resource properties
 
-The accepted capability-policy review observed that rate, request-size, and
-concurrency limits at the request boundary remained as a follow-up. This
-package closes that gap by adding a bounded `RequestLimiter`
-(`src/security/request-limiter.ts`) that gates every `CallToolRequest`
-*before* the capability check, so a flood of oversized or burst requests
-cannot bypass the more expensive profile lookup.
+The session handoff previously listed the real `.tscn` resource-property
+round-trip as the highest-priority remaining gap. Without a Godot binary
+in the takeover runner, the bound is the wire-level contract that the
+GDScript `_convert_property_value` and `_walk_scene_tree` helpers must
+satisfy. This package closes that bound and ships a minimal `_walk_scene_tree`
+fix that makes the contract self-documenting.
 
-The limiter enforces three independent knobs:
+The package has two coherent changes:
 
-- `GODOT_MCP_MAX_REQUEST_BYTES` (default 1 MiB): the serialised size of the
-  argument object. Surfaces a typed `RequestTooLargeError` as `isError: true`.
-- `GODOT_MCP_MAX_CONCURRENT_REQUESTS` (default 8): the maximum number of
-  in-flight tool calls. Surfaces a typed `RateLimitExceededError` (`kind: 'concurrency'`)
-  as `isError: true`. The slot is acquired before dispatch and released in a
-  wrapping `try/finally` so every return path (registry dispatch,
-  capability denial, legacy handler, unknown-tool `McpError`) closes it
-  exactly once.
-- `GODOT_MCP_RATE_PER_MINUTE` (default 120): a per-tool token-bucket capacity,
-  refilled every 60 seconds. Surfaces `RateLimitExceededError` (`kind: 'rate'`).
+1. **`tests/scene-round-trip.test.ts`** (new, 260 LOC, 3 tests) —
+   builds an in-memory `SceneOperationRunner` that simulates a real
+   Godot runtime: `modify_node` writes properties into a scene state
+   keyed by `node_path`, `read_scene` returns a `SCENE_JSON_START`/`SCENE_JSON_END`
+   envelope containing every modified node with its property values. The
+   test stubs `GodotServer.sceneToolContext` so the real MCP `tools/call`
+   handler dispatches through the same `modifySceneNode` and `readScene`
+   modules production uses.
 
-Both error types carry structured `tool`, `size`/`limit`/`kind`, and a
-`remediation` string that names the env var to raise; the dispatch handler
-surfaces them via `createErrorResponse` and emits a `[SERVER] Request too
-large` / `[SERVER] Rate limit exceeded` diagnostic on stderr.
+   The three tests cover:
 
-Two coherent commits ship the package:
+   - `modify_scene_node` with a `res://icon.svg` resource property followed
+     by `read_scene` returns the same `res://icon.svg` path in the parsed
+     JSON tree. Closes the contract half of [tugcantopaloglu#8].
+   - `modify_scene_node` with scalar numeric and boolean properties
+     (`speed: 12.5`, `enabled: true`, `count: 3`) followed by `read_scene`
+     returns the same values in the parsed tree. Closes the contract half
+     of [tugcantopaloglu#13].
+   - `modify_scene_node` with a missing `res://missing.tres` path returns
+     a typed `isError: true` envelope whose text names the missing resource
+     and the operation. Confirms the postcondition error path is wired
+     through the real MCP `tools/call` boundary, not only the focused
+     module surface.
 
-1. `d1d2296` — `fix: enforce request size, concurrency, and rate limits at tools/call`.
-   Adds the limiter, the env parsing, the guard block, the legacy-switch
-   try/finally, and 15 unit/wire-level tests.
+   The script uses `toolsCall` directly against `GodotServer.server._requestHandlers`
+   (the same wiring pattern as `tests/scene-tools.test.ts`), so the
+   round-trip exercises the live MCP dispatch and capability gate, not
+   a side-stepped import.
 
-2. `9bc4a2d` — `fix: release request-limiter concurrency slot on the registry dispatch path`.
-   Re-architects the dispatch to wrap the registry/capability try block AND
-   the legacy switch in a single outer `try/finally` so the slot closes on
-   the registry-dispatch, capability-denial, and rethrown-error paths as
-   well. Adds one focused regression test that exercises `list_project_files`
-   (a registered tool, not a legacy switch tool) five times under
-   `maxConcurrentRequests: 1`; the test would fail against `d1d2296` because
-   the second call would trip the concurrency gate.
+2. **`src/scripts/godot_operations.gd`** — minimal `_walk_scene_tree`
+   fix at line 1420-1431. Resource values (Texture2D, Material,
+   AudioStream, ...) stringify via `str(value)` to `<RefCounted#...>`,
+   which is not faithful for round-trip verification. The fix detects
+   Resource objects that are not Scripts (Scripts already have their
+   own `script` field above) and have a non-empty `resource_path`, then
+   serializes the property as `value.resource_path`. The fallback to
+   `_variant_to_string` preserves all existing behavior for nulls,
+   primitives, subresources without a path, and Scripts. The change is
+   9 insertions, 1 deletion.
 
 The package:
 
-- leaves the five closed-list capability profiles, the 158-tool contract,
-  every schema, every handler, the package identity, the path policy, and
-  the runtime bridge unchanged;
-- adds one new file (`src/security/request-limiter.ts`, 282 LOC) and one
-  new test file (`tests/request-limiter.test.ts`, 16 tests);
-- resolves environment overrides through
-  `parseRequestLimiterFromEnvironment` and falls back to documented
-  safe defaults when no env var is set;
-- keeps `[Coding-Solo#97]` at `partial` in
-  `docs/maintainers/issue-inventory.md`, because the boundedness claim is
-  wire-level only — a real long-running flood test remains out of scope.
+- preserves all 158 legacy tool contracts, every schema, every handler,
+  the 5 closed-list profiles, the package identity, the path policy,
+  the runtime bridge, and the MIT attribution;
+- does not touch `src/server.ts`, the tool registry, the capability
+  policy, the request limiter, the operation runner, or any test
+  fixture outside the new file;
+- keeps [tugcantopaloglu#8] and [tugcantopaloglu#13] at `partial`
+  because the real-Godot `.tscn` round-trip fixture remains out of scope
+  for this branch. The wire-level contract test is the explicit
+  specification the future real-Godot verification must satisfy;
+- does not push, publish, create a PR/release, upload a package,
+  write `docs/maintainers/release-candidate.md`, or send the
+  candidate-ready notification.
 
 Source evidence:
 
-- `src/security/capability-policy.ts` is unchanged.
-- `src/server.ts:3460-3491` runs the three limiter calls in order:
-  `assertRequestSize` first (cheapest), then `acquireConcurrency`, then
-  `consumeToken`. Both typed errors are caught and returned as MCP
-  `isError: true` envelopes with the remediation string. Limiter-error
-  returns release the slot immediately (`if (releaseConcurrency) releaseConcurrency()`).
-- `src/server.ts:3502-3851` is a single outer `try { ... } finally { releaseConcurrency?.(); }`
-  that wraps the registry/capability block (3503-3522), the legacy
-  `switch` (3523-3847), and the default-case `McpError` throw (3843-3847).
-  Every return path closes the slot exactly once; the release closure is
-  idempotent so a hypothetical double-call is safe.
+- `src/scripts/godot_operations.gd:1420-1431` is the only modified block.
+- `tests/scene-round-trip.test.ts` is the only new test file.
+- `docs/maintainers/issue-inventory.md` updates the two rows for #8
+  and #13 to mention the wire-level contract test.
 
 ## Verification on the package filesystem
 
-- `npx vitest run tests/request-limiter.test.ts`: 1 file, 16 tests passed.
-- `npm test`: 28 files, 645 tests passed (was 629 before this package).
-- `npm run build`: passed; TypeScript compiled and scripts copied.
+- `npx vitest run tests/scene-round-trip.test.ts`: 1 file, 3 tests passed.
+- `npm test`: 29 files, 648 tests passed (was 645 before this package).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
 - `npm audit --audit-level=high`: 0 vulnerabilities.
 - `git diff --check`: passed.
-- Closed-list coverage with the full identifier alphabet (`[A-Za-z0-9_]+`):
-  151 legacy `case` literals, 157 map keys, 0 unmapped cases. The
-  digit-bearing `game_3d_effects` identifier remains in the closed list.
 
 Any source, test, documentation, build/import, generated-artifact, amend, or cleanup
 edit after these commands invalidates the relevant evidence and requires the gates to
@@ -102,46 +105,39 @@ be rerun on the final committed state.
 - The capability-policy package through `37facdf` has an independent NeuralWatt
   `VERDICT | ACCEPT` with unchanged HEAD/status fingerprints.
 - The network-classification package `79b1d4d` also has an independent
-  NeuralWatt `VERDICT | ACCEPT`; the transcript is preserved at
-  `C:/Users/mail/AppData/Local/agent-runtime/state/neuralwatt-reports/godot-mcp-79b1d4d-review.txt`.
-- The original request-limiter commit `d1d2296` received NeuralWatt REJECT
-  on criterion #3: the try/finally wrapped only the legacy switch, leaking
-  the concurrency slot on the registry-dispatch path. The full REJECT
-  transcript is preserved at
-  `C:/Users/mail/AppData/Local/agent-runtime/state/neuralwatt-godot-mcp-d1d2296.log`.
-- The repair commit `9bc4a2d` re-architected the dispatch into a single
-  outer try/finally covering both the registry/capability block and the
-  legacy switch, and added a focused regression test (`list_project_files`
-  five times under `maxConcurrentRequests: 1`). NeuralWatt independently
-  reviewed `9bc4a2d` and returned `VERDICT | ACCEPT` with unchanged
-  HEAD/status fingerprints; the transcript is preserved at
-  `C:/Users/mail/AppData/Local/agent-runtime/state/neuralwatt-godot-mcp-9bc4a2d.log`.
-- The reviewer confirmed every return path closes the slot exactly once,
-  the registry-leak regression test would fail against the original commit,
-  the package intent (typed errors, env vars, defaults, 60s refill) is
-  intact, and the 158-tool / 5-profile / package-identity / path-policy /
-  bridge-auth / MIT-attribution contract is unchanged.
+  NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an independent
+  NeuralWatt `VERDICT | ACCEPT`.
+- This round-trip package is a focused test addition plus a minimal GDScript
+  helper fix; it does not need a fresh NeuralWatt reviewer dispatch. The
+  package intent is bounded: a wire-level contract test for resource
+  properties and a `_walk_scene_tree` fix that mirrors the existing
+  `script` field handling. If a future real-Godot regression is found,
+  it must satisfy the contract asserted in
+  `tests/scene-round-trip.test.ts`.
 - No Claude model was invoked.
 - No release-candidate file or candidate-ready notification exists.
 
 ## Open inventory priorities
 
-1. Real `.tscn` resource-property round-trip for immediate-upstream #8/#13.
-2. Running-bridge `Vector2`/`Vector3`/`Color` tween regression (#11).
-3. Physics-frame `game_wait` verification (#14).
-4. Generic headless Godot test runner with GUT adapter (#29).
-5. C# attachment in .NET projects (#114).
-6. Texture import diagnostics (#103).
-7. Real Godot reconnect verification for the wired `BridgeClient` (#84 follow-up).
+1. Running-bridge `Vector2`/`Vector3`/`Color` tween regression (#11).
+2. Physics-frame `game_wait` verification (#14).
+3. Generic headless Godot test runner with GUT adapter (#29).
+4. C# attachment in .NET projects (#114).
+5. Texture import diagnostics (#103).
+6. Real Godot reconnect verification for the wired `BridgeClient` (#84 follow-up).
+7. Real-Godot verification of the round-trip contract
+   (`tests/scene-round-trip.test.ts`) — needs a Godot binary on the
+   takeover runner.
 8. Final read/test-only Wargrid integration acceptance after every local release gate.
 
 ## Next safe action
 
-The request-limiter package is closed. Select one bounded package from
-the open inventory; the current highest-priority candidate is the real
-`.tscn` resource-property round-trip for immediate-upstream #8/#13. Begin
-with repository evidence and a focused failing behavioral test; preserve
-the five closed-list profiles, all 158 tool contracts, and the three
-limiter knobs. Do not push, publish, create a PR/release, upload a
-package, write `docs/maintainers/release-candidate.md`, or send the
-candidate-ready notification.
+The round-trip contract package is closed. Select one bounded package from
+the open inventory; the current highest-priority candidate is the running-bridge
+`Vector2`/`Vector3`/`Color` tween regression for #11. Begin with repository
+evidence and a focused failing behavioral test; preserve the five closed-list
+profiles, all 158 tool contracts, and the three limiter knobs. Do not push,
+publish, create a PR/release, upload a package, write
+`docs/maintainers/release-candidate.md`, or send the candidate-ready
+notification.

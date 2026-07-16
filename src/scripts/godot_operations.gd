@@ -1420,7 +1420,15 @@ func _walk_scene_tree(node) -> Dictionary:
         if usage & PROPERTY_USAGE_EDITOR and usage & PROPERTY_USAGE_STORAGE:
             var value = node.get(prop_name)
             if value != null:
-                props[prop_name] = _variant_to_string(value)
+                # Resource values (Texture2D, Material, AudioStream, ...) stringify
+                # via str() to <RefCounted#...>, which is not faithful for round-trip
+                # verification. Surface `resource_path` instead so a `modify_scene_node`
+                # call that persists a `res://icon.svg` reference can be read back as
+                # the same path. Mirrors the script field handling above.
+                if value is Resource and not (value is Script) and value.resource_path != "":
+                    props[prop_name] = value.resource_path
+                else:
+                    props[prop_name] = _variant_to_string(value)
 
     if props.size() > 0:
         info["properties"] = props
