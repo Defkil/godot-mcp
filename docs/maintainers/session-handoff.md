@@ -130,7 +130,7 @@ and dispatched to AGY (`godot-mcp-repair-48b921f.md`). The repair must:
 Do not advance to any other package until the REJECT is repaired and
 re-reviewed.
 
-## Repair landed and NeuralWatt re-review returned REJECT
+## Repair landed and NeuralWatt re-review #2 returned ACCEPT
 
 The reclassification fix was committed as `051170d` on top of `c60c50f`:
 
@@ -147,27 +147,34 @@ The reclassification fix was committed as `051170d` on top of `c60c50f`:
 - `docs/maintainers/issue-inventory.md:32` — `157` → `158`.
 - `docs/architecture/takeover-architecture.md:21` — `157` → `158`.
 
-NeuralWatt re-review of `c60c50f..051170d` returned
-`VERDICT | REJECT | session-handoff.md still describes the repair
-as in-flight/pending ... and does not reference HEAD 051170d —
-failing criterion 6; all security/code/test criteria pass and the
-fix is otherwise correct.` (full transcript saved at
-`C:/Users/mail/AppData/Local/agent-runtime/state/godot-mcp-reviews/051170d-re-review.txt`).
+NeuralWatt re-review #1 (`c60c50f..051170d`) returned
+`VERDICT | REJECT` on a single documentation finding (criterion 6):
+the prior handoff narrated the repair as still in progress while HEAD
+already carried it. The eight substantive criteria (reclassification,
+wire-level tests pin the corrected matrix, closed-list coverage
+preserved, 158-tool contract preserved, no security gate regression,
+no path/injection/auth/protocol/license/migration regression,
+fingerprint verification, traceback to the prior REJECT) were green.
 
-The blocking finding is documentation-only: the prior handoff section
-narrated the repair as still in progress while HEAD already carried
-it. The five substantive findings (reclassification, wire-level tests
-pin the corrected matrix, closed-list coverage preserved, 158-tool
-contract preserved, no security gate regression) are all green.
-
-The repair commit message itself names the reviewer finding verbatim
-(`Reviewer observation §1 of 48b921f-REJECT.txt`), and the re-review
-runner verified HEAD and status fingerprints before and after
-dispatch (`PRE_HEAD=051170d` ↔ `POST_HEAD=051170d`,
+Doc-only repair landed as `0a22637`; NeuralWatt re-review #2 of
+`051170d..0a22637` returned `VERDICT | ACCEPT` (full transcript saved
+at `C:/Users/mail/AppData/Local/agent-runtime/state/godot-mcp-reviews/0a22637-re-review-2.txt`).
+The runner verified HEAD and status fingerprints before and after
+dispatch (`PRE_HEAD=0a22637` ↔ `POST_HEAD=0a22637`,
 `PRE_STATUS_EMPTY=True` ↔ `POST_STATUS_EMPTY=True`).
+
+The capability-policy package (`24651c8`..`0a22637`) is now ACCEPTED
+by independent NeuralWatt review. The repair commit message named
+the reviewer finding verbatim, the second re-review covered only the
+documentation fix, and every gate was rerun against the final HEAD.
 
 ## Next safe action
 
-Advance the handoff to match HEAD `051170d` (replace the pre-commit
-narrative with the actual committed state), record the second
-NeuralWatt re-review, then re-dispatch NeuralWatt for an ACCEPT.
+The NeuralWatt REJECT on the capability-policy package is closed
+with an ACCEPT. Resume selection of the next coherence-defect
+package from `Open inventory rows still requiring work` below; the
+next open-canonical gate candidate is **rate / size / concurrency
+limits at the capability gate** (second half of `[Coding-Solo#97]`).
+Before advancing, run `npx vitest run`, `npm run build`, and
+`npm audit --audit-level=high` against the current HEAD to confirm
+nothing has drifted since `0a22637`.
