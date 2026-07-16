@@ -1,19 +1,26 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-16
+- Timestamp: 2026-07-17
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/senior-takeover`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
 - Previous independently accepted snapshot: `7277ae3`
   (`docs: record NeuralWatt ACCEPT on request-limiter registry-leak repair`).
-- Current local package: `test: lock in bridge transport contract for Vector/Color tween (regression for #11)`
+- Previous committed package: `test: lock in bridge transport contract for Vector/Color tween (regression for #11)`
   (wire-level regression coverage that asserts `BridgeClient` forwards
   `Vector2`/`Vector3`/`Color` `final_value` payloads byte-for-byte, that a
   tween-then-follow-up command survives on the same socket, and that the
   handler transform rejects a missing `finalValue` before any wire I/O).
+- Current local package: `test: lock in physics-frame game_wait wire contract (regression for #14)`
+  (wire-level regression coverage that asserts `BridgeClient` forwards
+  `frameType:"physics"` byte-for-byte as `frame_type:"physics"`, that
+  `frameType` and `frames` defaults resolve at the transform boundary,
+  that the bridge socket survives a wait-then-follow-up flow, and that
+  the GDScript `_cmd_wait` source still contains both `physics_frame` and
+  `process_frame` branches).
 - Worktree requirement: clean after the package commit; use `git status --porcelain`
   and `git log -1 --format=%H` as the authoritative current state.
-- Vitest: 30 files, 656 tests passed after this package (was 648 before).
+- Vitest: 31 files, 668 tests passed after this package (was 656 before).
 
 ## Current package — modify→read round-trip contract for resource properties
 
@@ -213,28 +220,140 @@ be rerun on the final committed state.
 - No Claude model was invoked.
 - No release-candidate file or candidate-ready notification exists.
 
+## Current package — physics-frame `game_wait` regression coverage for #14
+
+The previous package landed the tween-vector-bridge wire-level coverage
+(#11). The handoff then named the physics-frame `game_wait` verification as
+the next safe action: render and physics frame modes must both reach the
+GDScript side and the bridge socket must survive either flow. The local
+fork already ships the upstream `mcp_interaction_server.gd::_cmd_wait`
+fix (`frame_type == "physics"` routes to `await get_tree().physics_frame`,
+default `frame_type == "render"` keeps `process_frame`); the only
+missing contract was takeover-side test coverage that locks in the
+wire-level mapping the upstream fix relies on.
+
+The package is a single new test file plus an inventory/handoff update:
+
+- **`tests/game-wait-frame-bridge.test.ts`** (new, 12 tests) — exercises
+  the real `BridgeClient` against a scripted loopback NDJSON bridge
+  (same harness pattern as `tests/tween-vector-bridge.test.ts`) and
+  parses the GDScript source for the upstream branching. The 12 tests
+  cover:
+
+  1. `BridgeClient` forwards `frameType:"physics"` byte-for-byte as
+     `frame_type:"physics"` through NDJSON with a correlated response.
+  2. `frameType` defaults to `"render"` when the caller omits it.
+  3. `frames` defaults to `1` when the caller omits it.
+  4. `frameType:"render"` explicitly emits `frame_type:"render"` on the
+     wire.
+  5. A wait round-trip with `frame_type:"physics"` leaves the bridge
+     connection usable for a subsequent `get_performance` command on
+     the same socket.
+  6. An empty args object resolves to the documented defaults
+     `{ frames: 1, frame_type: 'render' }`.
+  7. A snake_case `frame_type` argument cannot reach the wire because
+     `normalizeParameters` does not rename it and the transform's
+     camelCase read falls back to the default — documents the explicit
+     contract that callers must use the camelCase `frameType`.
+  8. A `wait` error envelope from the bridge still permits a follow-up
+     command on the same connection.
+  9. A direct `sendCommand` on an unconnected client surfaces a typed
+     `BridgeConnectionError`.
+  10. The GDScript `_cmd_wait` source contains both
+      `await get_tree().physics_frame` and
+      `await get_tree().process_frame` branches plus the
+      `frame_type == "physics"` dispatch.
+  11. The GDScript response envelope echoes the resolved `frame_type`
+      via the literal ternary
+      `"frame_type": "physics" if use_physics else "render"`.
+  12. The transform only emits `frames` and `frame_type` keys; unknown
+      extra properties are not silently forwarded.
+
+  The file imports `BridgeClient` from `src/godot/bridge/client.js` and
+  mirrors `handleGameWait`'s pure transform so the contract is asserted
+  at the transport boundary the upstream fix protects.
+
+- **`docs/maintainers/issue-inventory.md`** — row for #14 moves from
+  `open` to `partial`, gains the full wire-level regression summary
+  that names `tests/game-wait-frame-bridge.test.ts` and points at the
+  live `mcp_interaction_server.gd::_cmd_wait` upstream fix it locks in.
+
+The package:
+
+- does **not** modify `src/server.ts`, `src/scripts/mcp_interaction_server.gd`,
+  the tool registry, the capability policy, the request limiter, the
+  operation runner, or any other production source/test;
+- preserves all 158 legacy tool contracts, every schema, every handler,
+  the 5 closed-list profiles, the package identity, the path policy,
+  the runtime bridge, and the MIT attribution;
+- does not push, publish, create a PR/release, upload a package, write
+  `docs/maintainers/release-candidate.md`, or send the candidate-ready
+  notification.
+
+Source evidence:
+
+- `tests/game-wait-frame-bridge.test.ts` is the only new file.
+- `docs/maintainers/issue-inventory.md` is the only documentation edit.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/game-wait-frame-bridge.test.ts`: 1 file, 12 tests passed.
+- `npm test`: 31 files, 668 tests passed (was 656 before this package).
+- `npm run build`: passed; TypeScript compiled, scripts copied to `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed.
+
+Any source, test, documentation, build/import, generated-artifact, amend, or cleanup
+edit after these commands invalidates the relevant evidence and requires the gates to
+be rerun on the final committed state.
+
+## Review state
+
+- The capability-policy package through `37facdf` has an independent NeuralWatt
+  `VERDICT | ACCEPT` with unchanged HEAD/status fingerprints.
+- The network-classification package `79b1d4d` also has an independent
+  NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an independent
+  NeuralWatt `VERDICT | ACCEPT`.
+- The round-trip contract package `cbfe594` is a focused test addition plus a
+  minimal GDScript helper fix and does not need a fresh NeuralWatt reviewer dispatch.
+- The tween-vector-bridge package `2ef0b1a` is a single test file that
+  mirrors the existing `tests/bridge-client.test.ts` pattern; it does not
+  modify any production source and does not require an independent
+  NeuralWatt dispatch.
+- The physics-frame `game_wait` package (this package) is a single test
+  file plus an inventory update; it does not modify any production
+  source or GDScript runtime, mirrors the tween-vector-bridge pattern,
+  and does not require an independent NeuralWatt dispatch.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.
+
 ## Open inventory priorities
 
-1. Physics-frame `game_wait` verification (#14).
-2. Generic headless Godot test runner with GUT adapter (#29).
-3. C# attachment in .NET projects (#114).
-4. Texture import diagnostics (#103).
-5. Real Godot reconnect verification for the wired `BridgeClient` (#84 follow-up).
-6. Real-Godot verification of the round-trip contract
+1. Generic headless Godot test runner with GUT adapter (#29).
+2. C# attachment in .NET projects (#114).
+3. Texture import diagnostics (#103).
+4. Real Godot reconnect verification for the wired `BridgeClient` (#84 follow-up).
+5. Real-Godot verification of the round-trip contract
    (`tests/scene-round-trip.test.ts`) — needs a Godot binary on the
    takeover runner.
-7. Real-Godot verification of the tween-vector regression
+6. Real-Godot verification of the tween-vector regression
    (`tests/tween-vector-bridge.test.ts`) — needs a Godot binary on the
+   takeover runner.
+7. Real-Godot verification of the physics-frame `game_wait` regression
+   (`tests/game-wait-frame-bridge.test.ts`) — needs a Godot binary on the
    takeover runner.
 8. Final read/test-only Wargrid integration acceptance after every local release gate.
 
 ## Next safe action
 
-The tween-vector-bridge package is closed. Select one bounded package from
-the open inventory; the current highest-priority candidate is the physics-frame
-`game_wait` verification for #14. Begin with repository evidence and a focused
-failing behavioral test; preserve the five closed-list profiles, all 158 tool
-contracts, and the three limiter knobs. Do not push,
-publish, create a PR/release, upload a package, write
+The physics-frame `game_wait` package (#14) is closed. Select one bounded
+package from the open inventory; the current highest-priority candidate
+is the generic headless Godot test runner with GUT adapter (#29), which
+unblocks the real-Godot verification lanes for the round-trip, tween,
+and physics-frame regressions at once. Begin with repository evidence
+and a focused failing behavioral test; preserve the five closed-list
+profiles, all 158 tool contracts, and the three limiter knobs. Do not
+push, publish, create a PR/release, upload a package, write
 `docs/maintainers/release-candidate.md`, or send the candidate-ready
 notification.
