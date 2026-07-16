@@ -89,6 +89,7 @@ The two immediate-upstream issues omitted from the focused regression table are 
 9. Bridge installation heuristically rewrote `project.godot`; the takeover now restores byte-exact snapshots and preserves colliding/user-managed files.
 10. `update_project_uids` passed a host path as a resource root; the takeover now passes `res://` and requires a typed result marker, pending real-Godot verification.
 11. The package had one executable/library entrypoint; the takeover branch now separates them while preserving legacy `build/index.js` execution.
+12. The MCP initialization metadata advertised stale version `0.1.0` independently of the package manifest; the server now sources its advertised version from the installed `package.json`, with a behavioral regression test. Runtime launch responses also keep both per-session port and token confined to the child environment, matching the documented transport boundary.
 
 ## Publication boundary
 

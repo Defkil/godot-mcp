@@ -53,6 +53,7 @@ import { installRuntimeBridge, type BridgeInstallation } from './godot/bridge-in
 import { createUidResaveParams, parseUidResaveSummary } from './godot/uid-resave.js';
 import { allocateRuntimeCredentials, runtimeEnvironment } from './godot/runtime-credentials.js';
 import { listProjectFiles } from './tools/project/list-project-files.js';
+import { PACKAGE_VERSION } from './package-metadata.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -199,7 +200,7 @@ export class GodotServer {
     this.server = new Server(
       {
         name: 'godot-mcp',
-        version: '0.1.0',
+        version: PACKAGE_VERSION,
       },
       {
         capabilities: {
@@ -3902,7 +3903,7 @@ export class GodotServer {
         content: [
           {
             type: 'text',
-            text: `Godot project started and the authenticated interaction bridge is ready on 127.0.0.1:${credentials.port}.`,
+            text: 'Godot project started and the authenticated interaction bridge is ready.',
           },
         ],
       };

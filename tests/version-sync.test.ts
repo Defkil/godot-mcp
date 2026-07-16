@@ -3,7 +3,35 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { syncVersions } from '../scripts/sync-version.js';
+import { GodotServer } from '../src/server.js';
+
+class LinkedTransport implements Transport {
+  peer!: LinkedTransport;
+  onmessage?: Transport['onmessage'];
+  onclose?: () => void;
+
+  async start(): Promise<void> {}
+
+  async send(message: JSONRPCMessage): Promise<void> {
+    this.peer.onmessage?.(message);
+  }
+
+  async close(): Promise<void> {
+    this.onclose?.();
+  }
+}
+
+function createLinkedTransports(): [LinkedTransport, LinkedTransport] {
+  const first = new LinkedTransport();
+  const second = new LinkedTransport();
+  first.peer = second;
+  second.peer = first;
+  return [first, second];
+}
 
 async function writeJson(root: string, name: string, value: unknown) {
   await writeFile(path.join(root, name), `${JSON.stringify(value, null, 2)}\n`);
@@ -46,6 +74,28 @@ describe('syncVersions', () => {
     expect(server.packages.every((entry: { version: string }) => entry.version === packageJson.version)).toBe(
       true
     );
+  });
+
+  it('reports the package version through MCP initialization', async () => {
+    const root = fileURLToPath(new URL('..', import.meta.url));
+    const packageJson = await readJson(root, 'package.json');
+    const server = new GodotServer({
+      godotPath: process.execPath,
+      registerSignalHandlers: false,
+    });
+    const client = new Client({ name: 'metadata-test', version: '1.0.0' });
+    const [clientTransport, serverTransport] = createLinkedTransports();
+
+    await (server as any).server.connect(serverTransport);
+    await client.connect(clientTransport);
+
+    expect(client.getServerVersion()).toEqual({
+      name: 'godot-mcp',
+      version: packageJson.version,
+    });
+
+    await client.close();
+    await server.cleanup();
   });
 
   it('uses package.json as the version source for lockfile and MCP registry metadata', async () => {

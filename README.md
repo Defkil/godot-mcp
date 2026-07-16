@@ -575,19 +575,20 @@ The server uses two communication channels:
 
 ## Testing
 
-The project uses [Vitest](https://vitest.dev/) with 457 tests across 6 files:
+The project uses [Vitest](https://vitest.dev/) for behavior and contract coverage across the server, security policies, lifecycle, authenticated runtime bridge, project mutations, tool compatibility, package metadata, and pure utility modules. The suite is split across focused files under `tests/`; use the current test runner summary rather than a hard-coded count as the authoritative total.
 
-| File | Tests | What it covers |
-|------|-------|----------------|
-| `tests/utils.test.ts` | 31 | Parameter mappings, normalization, path validation, error responses, version detection |
-| `tests/tool-definitions.test.ts` | 165 | All tools defined, schemas valid, names unique, descriptions < 80 chars |
-| `tests/handlers.test.ts` | 225 | Game command arg transforms, required-param validation, headless op path checks, source structure |
-| `tests/dotnet.test.ts` | 20 | .NET feature flag, .csproj generation, C# script template generation, identifier validation |
-| `tests/validate-script.test.ts` | 12 | GDScript diagnostic parsing + git-changed file collection |
-| `tests/version-sync.test.ts` | 4 | Release version synchronization across package and MCP registry manifests |
+Representative coverage includes:
+
+| Area | Test files |
+|------|------------|
+| Tool contracts and handlers | `tool-definitions`, `handlers`, `utils` |
+| Path and class security | `path-policy`, `tool-path-guard`, `godot-class-name` |
+| Runtime lifecycle and authentication | `server-lifecycle`, `process-lifecycle`, `runtime-authentication`, `runtime-credentials`, `bridge-installer` |
+| Godot operations | `validate-script`, `uid-resave`, `list-project-files`, `dotnet` |
+| Packaging and embedding | `version-sync`, `library-entrypoint` |
 
 ```bash
-npm test          # run once
+npm test            # run once
 npm run test:watch  # watch mode
 ```
 

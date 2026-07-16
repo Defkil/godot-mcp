@@ -74,6 +74,7 @@ describe('GodotServer process lifecycle', () => {
     expect(child.spawnEnvironment?.GODOT_MCP_PORT).toMatch(/^\d+$/);
     expect(child.spawnEnvironment?.GODOT_MCP_PORT).not.toBe('9090');
     expect(child.spawnEnvironment?.GODOT_MCP_TOKEN).toMatch(/^[a-f0-9]{64}$/);
+    expect(started.content[0].text).not.toContain(child.spawnEnvironment!.GODOT_MCP_PORT!);
     expect(started.content[0].text).not.toContain(child.spawnEnvironment!.GODOT_MCP_TOKEN!);
 
     child.stdout.write('runtime ready\n');
