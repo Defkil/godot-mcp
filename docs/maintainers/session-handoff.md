@@ -4,71 +4,42 @@
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/senior-takeover`
 - Remote: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Worktree: dirty with the scene-tool registry migration; commit pending after independent review.
+- Last commit: `5565d6e` (`refactor: migrate headless scene tools to the typed registry`).
+- Worktree: dirty with the capability-policy enforcement package; pending fix to `manage_autoloads` capability classification, wire-level gate test, README + issue-inventory update, and commit.
 
-## Package in progress
+## Package in progress (this tick)
 
-`read_scene`, `modify_scene_node`, and `remove_scene_node` are now registered
-through the focused `src/tools/scene/*.ts` modules instead of the inline
-`case` statements that previously dispatched them. The legacy
-`handleReadScene` / `handleModifySceneNode` / `handleRemoveSceneNode` bodies
-are now thin wrappers that delegate to the typed modules; the registry owns
-the schema, capability and dispatch.
+Closed-list capability profiles gate every `CallToolRequest`:
 
-The migration closes the silent-failure modes of `tugcantopaloglu#8`
-(`modify_scene_node` resource properties) and `#13` (success envelopes for
-no-op writes). `godot_operations.gd` now records a typed
-`_postcondition_errors` array for unresolvable `res://` resources, silent
-`target.set()` rejections, missing parents and `remove_child` calls that did
-not actually detach the node; the operation runner emits a typed
-`status: error` envelope that `executeOperation` parses and the scene tool
-modules propagate as a `SceneOperationPostconditionError` instead of a
-false-positive success envelope.
-
-`executeOperation` was widened to accept the typed `status: error` envelope
-alongside the historical `status: ok` contract; non-scene handlers that only
-read `stdout` continue to work unchanged.
+- `src/security/capability-policy.ts` — `CapabilityPolicy`, `CapabilityDeniedError`, `parseCapabilityProfile`, `resolveCapabilityPolicyFromEnvironment` (default `legacy-full`, opt-in `unsafe-full`).
+- `src/security/legacy-capabilities.ts` — `LEGACY_TOOL_CAPABILITIES` map covering every legacy `case` name plus `capabilityForLegacyTool(name)`. Repairs the `manage_autoloads` gap that previously let it bypass strict profiles.
+- `src/server/tool-registry.ts` — registry now keeps a `setCapabilityCheck` gate; `dispatch()` consults it before invoking the registered handler.
+- `src/server.ts` — constructor installs a gate that calls `CapabilityPolicy.assertAllowed`; `CallToolRequestSchema` consults the registry dispatch first, then `capabilityForLegacyTool(name)` for the legacy case path. `CapabilityDeniedError` is caught locally and surfaced as a structured MCP `isError: true` envelope with remediation.
+- `tests/capability-policy.test.ts` — 13 unit tests covering profiles, env resolution, structured error and message hygiene.
+- `tests/capability-gate.test.ts` — 6 wire-level MCP `tools/call` tests: `inspect-only` reaches `get_godot_version`, `inspect-only` blocks `manage_autoloads`, every non-`unsafe-full` profile blocks `game_eval`, `unsafe-full` reaches `attach_script`, and `inspect-only` blocks `modify_project_settings` through the registry path.
+- `README.md` — `GODOT_MCP_CAPABILITY_PROFILE` documented in the environment table plus a dedicated *Capability profiles* table.
+- `docs/maintainers/issue-inventory.md` — `#97 policy enforcement` row updated to reflect capability-profile coverage (rate/size limits remain as follow-up).
 
 ## Verification
 
 - `npx tsc --noEmit`: clean.
 - `npm run build`: passed; TypeScript compiled and Godot scripts copied to `build/scripts`.
-- `npx vitest run`: 24 files, 574 tests passed (was 506 at job creation; +68 from this package).
+- `npx vitest run`: 26 files, 596 tests passed (was 574 at scene-tool commit; +22 from this package: 13 policy unit + 6 gate wire-level + 3 in the registry tests that consume the gate).
 - `npm audit --audit-level=high`: 0 vulnerabilities.
 - `git diff --check`: clean.
-- `tests/scene-tools.test.ts`: 20 tests, including three real MCP `tools/call`
-  wiring tests that inject a stubbed runner through `sceneToolContext()` and
-  exercise the `isError: true` envelope for typed postcondition failures on
-  `modify_scene_node` and `remove_scene_node`, plus a structured-JSON success
-  path for `read_scene`.
-- `tests/schema-parity.test.ts`: 3 tests, including the extended assertions
-  that the new tools appear exactly once in `tools/list`, are present in
-  `toolRegistry.definitions()`, and advertise the documented capabilities.
-- `tests/handlers.test.ts`: source-text assertions updated to reflect the
-  migrated module location (`SCENE_JSON_START`/`END` now live in
-  `src/tools/scene/read-scene.ts`) and the legacy `case`-statement count
-  changed from 154 to 151.
-- `tests/tool-definitions.test.ts`: `ALL_TOOL_NAMES` updated to include the
-  three migrated names.
-
-## Issue inventory updates
-
-- `tugcantopaloglu#8` disposition moved from `open` to `partial`.
-- `tugcantopaloglu#13` disposition moved from `open` to `partial`.
-
-Real `.tscn` round-trip and real-Godot modification remain as the
-`partial → verified` follow-up.
+- `npm pack --dry-run`: 29 files, ~131 KB; `build/security/capability-policy.js` and `build/security/legacy-capabilities.js` are present.
+- Godot 4.7 (`Godot_v4.7-stable_win64.exe`) `--headless --editor --quit`: clean (no new `.gd` files, but the editor re-imports the project).
 
 ## Next safe action
 
-Commit the scene-tool registry migration (one focused commit
-`refactor: migrate headless scene tools to the typed registry`) and return to
-the remaining open rows in `docs/maintainers/issue-inventory.md`. Candidate
-follow-ups:
+Commit the capability-policy enforcement as one focused package
+(`feat: enforce capability profiles at the tools/call boundary`) and update the
+dirty-state line above to `Worktree: clean`. Then return to the remaining open
+rows in `docs/maintainers/issue-inventory.md`. Candidate follow-ups:
 
-- Capability policy enforcement with profiles, rate/size limits and explicit
-  unsafe-tool opt-in (#97).
-- Resource-valued property round-trip on a real `.tscn` fixture (closes
-  the remaining `tugcantopaloglu#8` and `#13` evidence).
+- Rate / size / concurrency limits at the gate (the second half of `#97`).
+- Real `.tscn` round-trip on a real Godot fixture (closes the remaining
+  `tugcantopaloglu#8` and `#13` evidence).
 - Tween `Vector2` / `Vector3` / `Color` regression on a running bridge
   (`tugcantopaloglu#11`).
+- `game_wait` physics-frame verification (`tugcantopaloglu#14`).

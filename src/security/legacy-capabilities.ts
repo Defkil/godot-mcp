@@ -1,0 +1,198 @@
+import type { ToolCapability } from '../server/tool-registry.js';
+
+/**
+ * Mapping from legacy tool name to the capability tag that the
+ * `CapabilityPolicy` enforces at the `CallToolRequest` boundary.
+ *
+ * Tools migrated to the typed registry advertise their capability through
+ * `RegisteredToolDefinition.capability`; this map only covers the
+ * `case`-statement dispatch still present in `src/server.ts`.
+ *
+ * Classification rule:
+ * - `inspect`: read-only project/editor/runtime introspection.
+ * - `edit`: project file/resource/scene/script mutations.
+ * - `runtime`: launch, stop, bounded input/playtest control.
+ * - `export`: build and artifact generation (export presets, CI, Docker).
+ * - `network`: any non-loopback or download operation.
+ * - `unsafe`: arbitrary GDScript evaluation, arbitrary script attachment,
+ *   or repository automation generation.
+ *
+ * Every legacy tool that can execute user-supplied GDScript at runtime
+ * (`game_eval`, `game_call_method`, `attach_script`, `create_script`,
+ * `create_csharp_script`, `manage_ci_pipeline`, `manage_docker_export`,
+ * `manage_plugins`, `manage_translations`, `validate_scripts`) is
+ * classified `unsafe` so it is denied unless the operator explicitly
+ * opts in to the `unsafe-full` profile.
+ */
+export const LEGACY_TOOL_CAPABILITIES: Readonly<Record<string, ToolCapability>> = {
+  // inspect
+  get_godot_version: 'inspect',
+  list_projects: 'inspect',
+  get_project_info: 'inspect',
+  get_debug_output: 'inspect',
+  read_file: 'inspect',
+  read_project_settings: 'inspect',
+  get_uid: 'inspect',
+  manage_scene_signals: 'inspect',
+  manage_layers: 'inspect',
+  manage_plugins: 'inspect',
+  manage_translations: 'inspect',
+  manage_scene_structure: 'inspect',
+  manage_input_map: 'inspect',
+  game_get_scene_tree: 'inspect',
+  game_get_node_info: 'inspect',
+  game_get_property: 'inspect',
+  game_get_nodes_in_group: 'inspect',
+  game_find_nodes_by_class: 'inspect',
+  game_get_camera: 'inspect',
+  game_get_errors: 'inspect',
+  game_get_logs: 'inspect',
+  game_get_audio: 'inspect',
+  game_performance: 'inspect',
+  game_os_info: 'inspect',
+  game_input_state: 'inspect',
+  game_list_signals: 'inspect',
+  game_window: 'inspect',
+
+  // edit
+  manage_autoloads: 'edit',
+  create_scene: 'edit',
+  add_node: 'edit',
+  load_sprite: 'edit',
+  export_mesh_library: 'edit',
+  save_scene: 'edit',
+  update_project_uids: 'edit',
+  modify_scene_node: 'edit',
+  read_scene: 'inspect',
+  remove_scene_node: 'edit',
+  list_project_files: 'inspect',
+  modify_project_settings: 'edit',
+  attach_script: 'unsafe',
+  create_resource: 'edit',
+  write_file: 'edit',
+  delete_file: 'edit',
+  create_directory: 'edit',
+  rename_file: 'edit',
+  manage_resource: 'edit',
+  create_script: 'unsafe',
+  manage_shader: 'edit',
+  manage_theme_resource: 'edit',
+  set_main_scene: 'edit',
+  game_set_property: 'edit',
+  game_set_camera: 'edit',
+  game_instantiate_scene: 'edit',
+  game_remove_node: 'edit',
+  game_change_scene: 'edit',
+  game_reparent_node: 'edit',
+  game_connect_signal: 'edit',
+  game_disconnect_signal: 'edit',
+  game_emit_signal: 'edit',
+  game_spawn_node: 'edit',
+  game_create_timer: 'edit',
+  game_create_animation: 'edit',
+  game_play_animation: 'edit',
+  game_tween_property: 'edit',
+  game_set_particles: 'edit',
+  game_serialize_state: 'edit',
+  game_physics_body: 'edit',
+  game_create_joint: 'edit',
+  game_bone_pose: 'edit',
+  game_ui_theme: 'edit',
+  game_viewport: 'edit',
+  game_debug_draw: 'edit',
+  game_input_action: 'edit',
+  game_await_signal: 'edit',
+  game_script: 'edit',
+  game_time_scale: 'edit',
+  game_process_mode: 'edit',
+  game_world_settings: 'edit',
+  game_csg: 'edit',
+  game_multimesh: 'edit',
+  game_procedural_mesh: 'edit',
+  game_light_3d: 'edit',
+  game_mesh_instance: 'edit',
+  game_gridmap: 'edit',
+  game_3d_effects: 'edit',
+  game_gi: 'edit',
+  game_path_3d: 'edit',
+  game_sky: 'edit',
+  game_camera_attributes: 'edit',
+  game_navigation_3d: 'edit',
+  game_physics_3d: 'edit',
+  game_canvas: 'edit',
+  game_canvas_draw: 'edit',
+  game_light_2d: 'edit',
+  game_parallax: 'edit',
+  game_shape_2d: 'edit',
+  game_path_2d: 'edit',
+  game_physics_2d: 'edit',
+  game_animation_tree: 'edit',
+  game_animation_control: 'edit',
+  game_skeleton_ik: 'edit',
+  game_audio_effect: 'edit',
+  game_audio_bus_layout: 'edit',
+  game_audio_spatial: 'edit',
+  game_locale: 'edit',
+  game_ui_control: 'edit',
+  game_ui_text: 'edit',
+  game_ui_popup: 'edit',
+  game_ui_tree: 'edit',
+  game_ui_item_list: 'edit',
+  game_ui_tabs: 'edit',
+  game_ui_menu: 'edit',
+  game_ui_range: 'edit',
+  game_render_settings: 'edit',
+  game_visual_shader: 'edit',
+  game_terrain: 'edit',
+  game_video: 'edit',
+
+  // runtime
+  run_project: 'runtime',
+  stop_project: 'runtime',
+  launch_editor: 'runtime',
+  game_pause: 'runtime',
+  game_screenshot: 'runtime',
+  game_click: 'runtime',
+  game_key_press: 'runtime',
+  game_key_hold: 'runtime',
+  game_key_release: 'runtime',
+  game_mouse_move: 'runtime',
+  game_mouse_drag: 'runtime',
+  game_scroll: 'runtime',
+  game_get_ui: 'runtime',
+  game_wait: 'runtime',
+  game_raycast: 'runtime',
+  game_audio_play: 'runtime',
+  game_audio_bus: 'runtime',
+  game_navigate_path: 'runtime',
+  game_tilemap: 'runtime',
+  game_add_collision: 'runtime',
+  game_environment: 'runtime',
+  game_manage_group: 'runtime',
+  game_set_shader_param: 'runtime',
+  game_http_request: 'runtime',
+  game_websocket: 'runtime',
+  game_multiplayer: 'runtime',
+  game_rpc: 'runtime',
+  game_touch: 'runtime',
+  game_resource: 'runtime',
+  game_gamepad: 'runtime',
+
+  // export
+  export_project: 'export',
+  manage_export_presets: 'export',
+  manage_ci_pipeline: 'unsafe',
+  manage_docker_export: 'unsafe',
+  create_project: 'edit',
+  create_csharp_script: 'unsafe',
+
+  // unsafe
+  game_eval: 'unsafe',
+  game_call_method: 'unsafe',
+  validate_script: 'inspect',
+  validate_scripts: 'unsafe',
+};
+
+export function capabilityForLegacyTool(name: string): ToolCapability | undefined {
+  return LEGACY_TOOL_CAPABILITIES[name];
+}

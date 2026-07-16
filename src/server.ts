@@ -43,6 +43,14 @@ import { PathPolicy, createPathPolicyFromEnvironment } from './security/path-pol
 import { isSafeGodotClassName } from './security/godot-class-name.js';
 import { assertSafeToolPaths } from './security/tool-path-guard.js';
 import {
+  CapabilityPolicy,
+  CapabilityDeniedError,
+  resolveCapabilityPolicyFromEnvironment,
+  describeCapabilityPolicy,
+  type CapabilityProfileName,
+} from './security/capability-policy.js';
+import { capabilityForLegacyTool } from './security/legacy-capabilities.js';
+import {
   BoundedLineBuffer,
   LaunchError,
   observeStartup,
@@ -147,6 +155,7 @@ export interface GodotServerConfig {
   runtimeConnector?: (projectPath: string) => Promise<void>;
   runtimeConnectInitialDelayMs?: number;
   registerSignalHandlers?: boolean;
+  capabilityPolicy?: CapabilityPolicy;
 }
 
 /**
@@ -185,6 +194,7 @@ export class GodotServer {
   private readonly spawnProcess: SpawnProcess;
   private readonly runtimeConnector?: (projectPath: string) => Promise<void>;
   private readonly runtimeConnectInitialDelayMs: number;
+  private readonly capabilityPolicy: CapabilityPolicy;
   private gameConnection: GameConnection = {
     bridgeClient: null,
     connected: false,
@@ -202,6 +212,10 @@ export class GodotServer {
     this.spawnProcess = config?.spawnProcess ?? spawn;
     this.runtimeConnector = config?.runtimeConnector;
     this.runtimeConnectInitialDelayMs = config?.runtimeConnectInitialDelayMs ?? 2000;
+    this.capabilityPolicy = config?.capabilityPolicy ?? resolveCapabilityPolicyFromEnvironment();
+    this.toolRegistry.setCapabilityCheck((name, capability) =>
+      this.capabilityPolicy.assertAllowed(name, capability),
+    );
 
     // Apply configuration if provided
     let debugMode = DEBUG_MODE;
@@ -3413,338 +3427,352 @@ export class GodotServer {
         const message = error instanceof Error ? error.message : 'Invalid tool path arguments.';
         return createErrorResponse(`Path policy rejected ${request.params.name}: ${message}`);
       }
-      if (this.toolRegistry.has(request.params.name)) {
-        return await this.toolRegistry.dispatch(
-          request.params.name,
-          request.params.arguments as Record<string, unknown> | undefined,
-        );
+      try {
+        if (this.toolRegistry.has(request.params.name)) {
+          return await this.toolRegistry.dispatch(
+            request.params.name,
+            request.params.arguments as Record<string, unknown> | undefined,
+          );
+        }
+        const legacyCapability = capabilityForLegacyTool(request.params.name);
+        if (legacyCapability) {
+          this.capabilityPolicy.assertAllowed(request.params.name, legacyCapability);
+        }
+      } catch (error) {
+        if (error instanceof CapabilityDeniedError) {
+          console.error(
+            `[SERVER] Capability denied: ${request.params.name} (${error.required}) under profile '${error.profile}'`,
+          );
+          return createErrorResponse(error.remediation);
+        }
+        throw error;
       }
       switch (request.params.name) {
-        case 'run_project':
-          return await this.handleRunProject(request.params.arguments);
-        case 'get_debug_output':
-          return await this.handleGetDebugOutput();
-        case 'stop_project':
-          return await this.handleStopProject();
-        case 'get_godot_version':
-          return await this.handleGetGodotVersion();
-        case 'list_projects':
-          return await this.handleListProjects(request.params.arguments);
-        case 'get_project_info':
-          return await this.handleGetProjectInfo(request.params.arguments);
-        case 'create_scene':
-          return await this.handleCreateScene(request.params.arguments);
-        case 'add_node':
-          return await this.handleAddNode(request.params.arguments);
-        case 'load_sprite':
-          return await this.handleLoadSprite(request.params.arguments);
-        case 'export_mesh_library':
-          return await this.handleExportMeshLibrary(request.params.arguments);
-        case 'save_scene':
-          return await this.handleSaveScene(request.params.arguments);
-        case 'get_uid':
-          return await this.handleGetUid(request.params.arguments);
-        case 'update_project_uids':
-          return await this.handleUpdateProjectUids(request.params.arguments);
-        case 'game_screenshot':
-          return await this.handleGameScreenshot();
-        case 'game_click':
-          return await this.handleGameClick(request.params.arguments);
-        case 'game_key_press':
-          return await this.handleGameKeyPress(request.params.arguments);
-        case 'game_mouse_move':
-          return await this.handleGameMouseMove(request.params.arguments);
-        case 'game_get_ui':
-          return await this.handleGameGetUi();
-        case 'game_get_scene_tree':
-          return await this.handleGameGetSceneTree();
-        // New runtime interaction tools
-        case 'game_eval':
-          return await this.handleGameEval(request.params.arguments);
-        case 'game_get_property':
-          return await this.handleGameGetProperty(request.params.arguments);
-        case 'game_set_property':
-          return await this.handleGameSetProperty(request.params.arguments);
-        case 'game_call_method':
-          return await this.handleGameCallMethod(request.params.arguments);
-        case 'game_get_node_info':
-          return await this.handleGameGetNodeInfo(request.params.arguments);
-        case 'game_instantiate_scene':
-          return await this.handleGameInstantiateScene(request.params.arguments);
-        case 'game_remove_node':
-          return await this.handleGameRemoveNode(request.params.arguments);
-        case 'game_change_scene':
-          return await this.handleGameChangeScene(request.params.arguments);
-        case 'game_pause':
-          return await this.handleGamePause(request.params.arguments);
-        case 'game_performance':
-          return await this.handleGamePerformance();
-        case 'game_wait':
-          return await this.handleGameWait(request.params.arguments);
-        // Project management tools
-        case 'read_project_settings':
-          return await this.handleReadProjectSettings(request.params.arguments);
-        // New runtime signal/animation/group tools
-        case 'game_connect_signal':
-          return await this.handleGameConnectSignal(request.params.arguments);
-        case 'game_disconnect_signal':
-          return await this.handleGameDisconnectSignal(request.params.arguments);
-        case 'game_emit_signal':
-          return await this.handleGameEmitSignal(request.params.arguments);
-        case 'game_play_animation':
-          return await this.handleGamePlayAnimation(request.params.arguments);
-        case 'game_tween_property':
-          return await this.handleGameTweenProperty(request.params.arguments);
-        case 'game_get_nodes_in_group':
-          return await this.handleGameGetNodesInGroup(request.params.arguments);
-        case 'game_find_nodes_by_class':
-          return await this.handleGameFindNodesByClass(request.params.arguments);
-        case 'game_reparent_node':
-          return await this.handleGameReparentNode(request.params.arguments);
-        // Headless resource tools
-        case 'attach_script':
-          return await this.handleAttachScript(request.params.arguments);
-        case 'create_resource':
-          return await this.handleCreateResource(request.params.arguments);
-        // File I/O tools
-        case 'read_file':
-          return await this.handleReadFile(request.params.arguments);
-        case 'write_file':
-          return await this.handleWriteFile(request.params.arguments);
-        case 'delete_file':
-          return await this.handleDeleteFile(request.params.arguments);
-        case 'create_directory':
-          return await this.handleCreateDirectory(request.params.arguments);
-        // Error/Log capture tools
-        case 'game_get_errors':
-          return await this.handleGameGetErrors();
-        case 'game_get_logs':
-          return await this.handleGameGetLogs();
-        // Enhanced input tools
-        case 'game_key_hold':
-          return await this.handleGameKeyHold(request.params.arguments);
-        case 'game_key_release':
-          return await this.handleGameKeyRelease(request.params.arguments);
-        case 'game_scroll':
-          return await this.handleGameScroll(request.params.arguments);
-        case 'game_mouse_drag':
-          return await this.handleGameMouseDrag(request.params.arguments);
-        case 'game_gamepad':
-          return await this.handleGameGamepad(request.params.arguments);
-        // Project management tools
-        case 'create_project':
-          return await this.handleCreateProject(request.params.arguments);
-        case 'create_csharp_script':
-          return await this.handleCreateCsharpScript(request.params.arguments);
-        case 'manage_autoloads':
-          return await this.handleManageAutoloads(request.params.arguments);
-        case 'manage_input_map':
-          return await this.handleManageInputMap(request.params.arguments);
-        case 'manage_export_presets':
-          return await this.handleManageExportPresets(request.params.arguments);
-        // Advanced runtime tools
-        case 'game_get_camera':
-          return await this.handleGameGetCamera();
-        case 'game_set_camera':
-          return await this.handleGameSetCamera(request.params.arguments);
-        case 'game_raycast':
-          return await this.handleGameRaycast(request.params.arguments);
-        case 'game_get_audio':
-          return await this.handleGameGetAudio();
-        case 'game_spawn_node':
-          return await this.handleGameSpawnNode(request.params.arguments);
-        // Shader, audio, navigation, tilemap, collision, environment tools
-        case 'game_set_shader_param':
-          return await this.handleGameSetShaderParam(request.params.arguments);
-        case 'game_audio_play':
-          return await this.handleGameAudioPlay(request.params.arguments);
-        case 'game_audio_bus':
-          return await this.handleGameAudioBus(request.params.arguments);
-        case 'game_navigate_path':
-          return await this.handleGameNavigatePath(request.params.arguments);
-        case 'game_tilemap':
-          return await this.handleGameTilemap(request.params.arguments);
-        case 'game_add_collision':
-          return await this.handleGameAddCollision(request.params.arguments);
-        case 'game_environment':
-          return await this.handleGameEnvironment(request.params.arguments);
-        // Group, timer, particles, animation, export, state, physics, joint, bone, theme, viewport, debug
-        case 'game_manage_group':
-          return await this.handleGameManageGroup(request.params.arguments);
-        case 'game_create_timer':
-          return await this.handleGameCreateTimer(request.params.arguments);
-        case 'game_set_particles':
-          return await this.handleGameSetParticles(request.params.arguments);
-        case 'game_create_animation':
-          return await this.handleGameCreateAnimation(request.params.arguments);
-        case 'export_project':
-          return await this.handleExportProject(request.params.arguments);
-        case 'game_serialize_state':
-          return await this.handleGameSerializeState(request.params.arguments);
-        case 'game_physics_body':
-          return await this.handleGamePhysicsBody(request.params.arguments);
-        case 'game_create_joint':
-          return await this.handleGameCreateJoint(request.params.arguments);
-        case 'game_bone_pose':
-          return await this.handleGameBonePose(request.params.arguments);
-        case 'game_ui_theme':
-          return await this.handleGameUiTheme(request.params.arguments);
-        case 'game_viewport':
-          return await this.handleGameViewport(request.params.arguments);
-        case 'game_debug_draw':
-          return await this.handleGameDebugDraw(request.params.arguments);
-        // Batch 1: Networking + Input + System + Signals + Script
-        case 'game_http_request':
-          return await this.handleGameHttpRequest(request.params.arguments);
-        case 'game_websocket':
-          return await this.handleGameWebsocket(request.params.arguments);
-        case 'game_multiplayer':
-          return await this.handleGameMultiplayer(request.params.arguments);
-        case 'game_rpc':
-          return await this.handleGameRpc(request.params.arguments);
-        case 'game_touch':
-          return await this.handleGameTouch(request.params.arguments);
-        case 'game_input_state':
-          return await this.handleGameInputState(request.params.arguments);
-        case 'game_input_action':
-          return await this.handleGameInputAction(request.params.arguments);
-        case 'game_list_signals':
-          return await this.handleGameListSignals(request.params.arguments);
-        case 'game_await_signal':
-          return await this.handleGameAwaitSignal(request.params.arguments);
-        case 'game_script':
-          return await this.handleGameScript(request.params.arguments);
-        case 'game_window':
-          return await this.handleGameWindow(request.params.arguments);
-        case 'game_os_info':
-          return await this.handleGameOsInfo(request.params.arguments);
-        case 'game_time_scale':
-          return await this.handleGameTimeScale(request.params.arguments);
-        case 'game_process_mode':
-          return await this.handleGameProcessMode(request.params.arguments);
-        case 'game_world_settings':
-          return await this.handleGameWorldSettings(request.params.arguments);
-        // Batch 2: 3D Rendering + Lighting + Sky + Physics
-        case 'game_csg':
-          return await this.handleGameCsg(request.params.arguments);
-        case 'game_multimesh':
-          return await this.handleGameMultimesh(request.params.arguments);
-        case 'game_procedural_mesh':
-          return await this.handleGameProceduralMesh(request.params.arguments);
-        case 'game_light_3d':
-          return await this.handleGameLight3d(request.params.arguments);
-        case 'game_mesh_instance':
-          return await this.handleGameMeshInstance(request.params.arguments);
-        case 'game_gridmap':
-          return await this.handleGameGridmap(request.params.arguments);
-        case 'game_3d_effects':
-          return await this.handleGame3dEffects(request.params.arguments);
-        case 'game_gi':
-          return await this.handleGameGi(request.params.arguments);
-        case 'game_path_3d':
-          return await this.handleGamePath3d(request.params.arguments);
-        case 'game_sky':
-          return await this.handleGameSky(request.params.arguments);
-        case 'game_camera_attributes':
-          return await this.handleGameCameraAttributes(request.params.arguments);
-        case 'game_navigation_3d':
-          return await this.handleGameNavigation3d(request.params.arguments);
-        case 'game_physics_3d':
-          return await this.handleGamePhysics3d(request.params.arguments);
-        // Batch 3: 2D Systems + Animation Advanced + Audio Effects
-        case 'game_canvas':
-          return await this.handleGameCanvas(request.params.arguments);
-        case 'game_canvas_draw':
-          return await this.handleGameCanvasDraw(request.params.arguments);
-        case 'game_light_2d':
-          return await this.handleGameLight2d(request.params.arguments);
-        case 'game_parallax':
-          return await this.handleGameParallax(request.params.arguments);
-        case 'game_shape_2d':
-          return await this.handleGameShape2d(request.params.arguments);
-        case 'game_path_2d':
-          return await this.handleGamePath2d(request.params.arguments);
-        case 'game_physics_2d':
-          return await this.handleGamePhysics2d(request.params.arguments);
-        case 'game_animation_tree':
-          return await this.handleGameAnimationTree(request.params.arguments);
-        case 'game_animation_control':
-          return await this.handleGameAnimationControl(request.params.arguments);
-        case 'game_skeleton_ik':
-          return await this.handleGameSkeletonIk(request.params.arguments);
-        case 'game_audio_effect':
-          return await this.handleGameAudioEffect(request.params.arguments);
-        case 'game_audio_bus_layout':
-          return await this.handleGameAudioBusLayout(request.params.arguments);
-        case 'game_audio_spatial':
-          return await this.handleGameAudioSpatial(request.params.arguments);
-        // Batch 4: Editor/Headless + Localization + Resource
-        case 'rename_file':
-          return await this.handleRenameFile(request.params.arguments);
-        case 'manage_resource':
-          return await this.handleManageResource(request.params.arguments);
-        case 'validate_script':
-          return await this.handleValidateScript(request.params.arguments);
-        case 'validate_scripts':
-          return await this.handleValidateScripts(request.params.arguments);
-        case 'create_script':
-          return await this.handleCreateScript(request.params.arguments);
-        case 'manage_scene_signals':
-          return await this.handleManageSceneSignals(request.params.arguments);
-        case 'manage_layers':
-          return await this.handleManageLayers(request.params.arguments);
-        case 'manage_plugins':
-          return await this.handleManagePlugins(request.params.arguments);
-        case 'manage_shader':
-          return await this.handleManageShader(request.params.arguments);
-        case 'manage_theme_resource':
-          return await this.handleManageThemeResource(request.params.arguments);
-        case 'set_main_scene':
-          return await this.handleSetMainScene(request.params.arguments);
-        case 'manage_scene_structure':
-          return await this.handleManageSceneStructure(request.params.arguments);
-        case 'manage_translations':
-          return await this.handleManageTranslations(request.params.arguments);
-        case 'game_locale':
-          return await this.handleGameLocale(request.params.arguments);
-        // Batch 5: UI Controls + Rendering + Resource Runtime
-        case 'game_ui_control':
-          return await this.handleGameUiControl(request.params.arguments);
-        case 'game_ui_text':
-          return await this.handleGameUiText(request.params.arguments);
-        case 'game_ui_popup':
-          return await this.handleGameUiPopup(request.params.arguments);
-        case 'game_ui_tree':
-          return await this.handleGameUiTree(request.params.arguments);
-        case 'game_ui_item_list':
-          return await this.handleGameUiItemList(request.params.arguments);
-        case 'game_ui_tabs':
-          return await this.handleGameUiTabs(request.params.arguments);
-        case 'game_ui_menu':
-          return await this.handleGameUiMenu(request.params.arguments);
-        case 'game_ui_range':
-          return await this.handleGameUiRange(request.params.arguments);
-        case 'game_render_settings':
-          return await this.handleGameRenderSettings(request.params.arguments);
-        case 'game_resource':
-          return await this.handleGameResource(request.params.arguments);
-        // Batch 6: Visual Shader + Terrain + Video + CI/CD
-        case 'game_visual_shader':
-          return await this.handleGameVisualShader(request.params.arguments);
-        case 'game_terrain':
-          return await this.handleGameTerrain(request.params.arguments);
-        case 'game_video':
-          return await this.handleGameVideo(request.params.arguments);
-        case 'manage_ci_pipeline':
-          return await this.handleManageCiPipeline(request.params.arguments);
-        case 'manage_docker_export':
-          return await this.handleManageDockerExport(request.params.arguments);
+    case 'run_project':
+      return await this.handleRunProject(request.params.arguments);
+    case 'get_debug_output':
+      return await this.handleGetDebugOutput();
+    case 'stop_project':
+      return await this.handleStopProject();
+    case 'get_godot_version':
+      return await this.handleGetGodotVersion();
+    case 'list_projects':
+      return await this.handleListProjects(request.params.arguments);
+    case 'get_project_info':
+      return await this.handleGetProjectInfo(request.params.arguments);
+    case 'create_scene':
+      return await this.handleCreateScene(request.params.arguments);
+    case 'add_node':
+      return await this.handleAddNode(request.params.arguments);
+    case 'load_sprite':
+      return await this.handleLoadSprite(request.params.arguments);
+    case 'export_mesh_library':
+      return await this.handleExportMeshLibrary(request.params.arguments);
+    case 'save_scene':
+      return await this.handleSaveScene(request.params.arguments);
+    case 'get_uid':
+      return await this.handleGetUid(request.params.arguments);
+    case 'update_project_uids':
+      return await this.handleUpdateProjectUids(request.params.arguments);
+    case 'game_screenshot':
+      return await this.handleGameScreenshot();
+    case 'game_click':
+      return await this.handleGameClick(request.params.arguments);
+    case 'game_key_press':
+      return await this.handleGameKeyPress(request.params.arguments);
+    case 'game_mouse_move':
+      return await this.handleGameMouseMove(request.params.arguments);
+    case 'game_get_ui':
+      return await this.handleGameGetUi();
+    case 'game_get_scene_tree':
+      return await this.handleGameGetSceneTree();
+    // New runtime interaction tools
+    case 'game_eval':
+      return await this.handleGameEval(request.params.arguments);
+    case 'game_get_property':
+      return await this.handleGameGetProperty(request.params.arguments);
+    case 'game_set_property':
+      return await this.handleGameSetProperty(request.params.arguments);
+    case 'game_call_method':
+      return await this.handleGameCallMethod(request.params.arguments);
+    case 'game_get_node_info':
+      return await this.handleGameGetNodeInfo(request.params.arguments);
+    case 'game_instantiate_scene':
+      return await this.handleGameInstantiateScene(request.params.arguments);
+    case 'game_remove_node':
+      return await this.handleGameRemoveNode(request.params.arguments);
+    case 'game_change_scene':
+      return await this.handleGameChangeScene(request.params.arguments);
+    case 'game_pause':
+      return await this.handleGamePause(request.params.arguments);
+    case 'game_performance':
+      return await this.handleGamePerformance();
+    case 'game_wait':
+      return await this.handleGameWait(request.params.arguments);
+    // Project management tools
+    case 'read_project_settings':
+      return await this.handleReadProjectSettings(request.params.arguments);
+    // New runtime signal/animation/group tools
+    case 'game_connect_signal':
+      return await this.handleGameConnectSignal(request.params.arguments);
+    case 'game_disconnect_signal':
+      return await this.handleGameDisconnectSignal(request.params.arguments);
+    case 'game_emit_signal':
+      return await this.handleGameEmitSignal(request.params.arguments);
+    case 'game_play_animation':
+      return await this.handleGamePlayAnimation(request.params.arguments);
+    case 'game_tween_property':
+      return await this.handleGameTweenProperty(request.params.arguments);
+    case 'game_get_nodes_in_group':
+      return await this.handleGameGetNodesInGroup(request.params.arguments);
+    case 'game_find_nodes_by_class':
+      return await this.handleGameFindNodesByClass(request.params.arguments);
+    case 'game_reparent_node':
+      return await this.handleGameReparentNode(request.params.arguments);
+    // Headless resource tools
+    case 'attach_script':
+      return await this.handleAttachScript(request.params.arguments);
+    case 'create_resource':
+      return await this.handleCreateResource(request.params.arguments);
+    // File I/O tools
+    case 'read_file':
+      return await this.handleReadFile(request.params.arguments);
+    case 'write_file':
+      return await this.handleWriteFile(request.params.arguments);
+    case 'delete_file':
+      return await this.handleDeleteFile(request.params.arguments);
+    case 'create_directory':
+      return await this.handleCreateDirectory(request.params.arguments);
+    // Error/Log capture tools
+    case 'game_get_errors':
+      return await this.handleGameGetErrors();
+    case 'game_get_logs':
+      return await this.handleGameGetLogs();
+    // Enhanced input tools
+    case 'game_key_hold':
+      return await this.handleGameKeyHold(request.params.arguments);
+    case 'game_key_release':
+      return await this.handleGameKeyRelease(request.params.arguments);
+    case 'game_scroll':
+      return await this.handleGameScroll(request.params.arguments);
+    case 'game_mouse_drag':
+      return await this.handleGameMouseDrag(request.params.arguments);
+    case 'game_gamepad':
+      return await this.handleGameGamepad(request.params.arguments);
+    // Project management tools
+    case 'create_project':
+      return await this.handleCreateProject(request.params.arguments);
+    case 'create_csharp_script':
+      return await this.handleCreateCsharpScript(request.params.arguments);
+    case 'manage_autoloads':
+      return await this.handleManageAutoloads(request.params.arguments);
+    case 'manage_input_map':
+      return await this.handleManageInputMap(request.params.arguments);
+    case 'manage_export_presets':
+      return await this.handleManageExportPresets(request.params.arguments);
+    // Advanced runtime tools
+    case 'game_get_camera':
+      return await this.handleGameGetCamera();
+    case 'game_set_camera':
+      return await this.handleGameSetCamera(request.params.arguments);
+    case 'game_raycast':
+      return await this.handleGameRaycast(request.params.arguments);
+    case 'game_get_audio':
+      return await this.handleGameGetAudio();
+    case 'game_spawn_node':
+      return await this.handleGameSpawnNode(request.params.arguments);
+    // Shader, audio, navigation, tilemap, collision, environment tools
+    case 'game_set_shader_param':
+      return await this.handleGameSetShaderParam(request.params.arguments);
+    case 'game_audio_play':
+      return await this.handleGameAudioPlay(request.params.arguments);
+    case 'game_audio_bus':
+      return await this.handleGameAudioBus(request.params.arguments);
+    case 'game_navigate_path':
+      return await this.handleGameNavigatePath(request.params.arguments);
+    case 'game_tilemap':
+      return await this.handleGameTilemap(request.params.arguments);
+    case 'game_add_collision':
+      return await this.handleGameAddCollision(request.params.arguments);
+    case 'game_environment':
+      return await this.handleGameEnvironment(request.params.arguments);
+    // Group, timer, particles, animation, export, state, physics, joint, bone, theme, viewport, debug
+    case 'game_manage_group':
+      return await this.handleGameManageGroup(request.params.arguments);
+    case 'game_create_timer':
+      return await this.handleGameCreateTimer(request.params.arguments);
+    case 'game_set_particles':
+      return await this.handleGameSetParticles(request.params.arguments);
+    case 'game_create_animation':
+      return await this.handleGameCreateAnimation(request.params.arguments);
+    case 'export_project':
+      return await this.handleExportProject(request.params.arguments);
+    case 'game_serialize_state':
+      return await this.handleGameSerializeState(request.params.arguments);
+    case 'game_physics_body':
+      return await this.handleGamePhysicsBody(request.params.arguments);
+    case 'game_create_joint':
+      return await this.handleGameCreateJoint(request.params.arguments);
+    case 'game_bone_pose':
+      return await this.handleGameBonePose(request.params.arguments);
+    case 'game_ui_theme':
+      return await this.handleGameUiTheme(request.params.arguments);
+    case 'game_viewport':
+      return await this.handleGameViewport(request.params.arguments);
+    case 'game_debug_draw':
+      return await this.handleGameDebugDraw(request.params.arguments);
+    // Batch 1: Networking + Input + System + Signals + Script
+    case 'game_http_request':
+      return await this.handleGameHttpRequest(request.params.arguments);
+    case 'game_websocket':
+      return await this.handleGameWebsocket(request.params.arguments);
+    case 'game_multiplayer':
+      return await this.handleGameMultiplayer(request.params.arguments);
+    case 'game_rpc':
+      return await this.handleGameRpc(request.params.arguments);
+    case 'game_touch':
+      return await this.handleGameTouch(request.params.arguments);
+    case 'game_input_state':
+      return await this.handleGameInputState(request.params.arguments);
+    case 'game_input_action':
+      return await this.handleGameInputAction(request.params.arguments);
+    case 'game_list_signals':
+      return await this.handleGameListSignals(request.params.arguments);
+    case 'game_await_signal':
+      return await this.handleGameAwaitSignal(request.params.arguments);
+    case 'game_script':
+      return await this.handleGameScript(request.params.arguments);
+    case 'game_window':
+      return await this.handleGameWindow(request.params.arguments);
+    case 'game_os_info':
+      return await this.handleGameOsInfo(request.params.arguments);
+    case 'game_time_scale':
+      return await this.handleGameTimeScale(request.params.arguments);
+    case 'game_process_mode':
+      return await this.handleGameProcessMode(request.params.arguments);
+    case 'game_world_settings':
+      return await this.handleGameWorldSettings(request.params.arguments);
+    // Batch 2: 3D Rendering + Lighting + Sky + Physics
+    case 'game_csg':
+      return await this.handleGameCsg(request.params.arguments);
+    case 'game_multimesh':
+      return await this.handleGameMultimesh(request.params.arguments);
+    case 'game_procedural_mesh':
+      return await this.handleGameProceduralMesh(request.params.arguments);
+    case 'game_light_3d':
+      return await this.handleGameLight3d(request.params.arguments);
+    case 'game_mesh_instance':
+      return await this.handleGameMeshInstance(request.params.arguments);
+    case 'game_gridmap':
+      return await this.handleGameGridmap(request.params.arguments);
+    case 'game_3d_effects':
+      return await this.handleGame3dEffects(request.params.arguments);
+    case 'game_gi':
+      return await this.handleGameGi(request.params.arguments);
+    case 'game_path_3d':
+      return await this.handleGamePath3d(request.params.arguments);
+    case 'game_sky':
+      return await this.handleGameSky(request.params.arguments);
+    case 'game_camera_attributes':
+      return await this.handleGameCameraAttributes(request.params.arguments);
+    case 'game_navigation_3d':
+      return await this.handleGameNavigation3d(request.params.arguments);
+    case 'game_physics_3d':
+      return await this.handleGamePhysics3d(request.params.arguments);
+    // Batch 3: 2D Systems + Animation Advanced + Audio Effects
+    case 'game_canvas':
+      return await this.handleGameCanvas(request.params.arguments);
+    case 'game_canvas_draw':
+      return await this.handleGameCanvasDraw(request.params.arguments);
+    case 'game_light_2d':
+      return await this.handleGameLight2d(request.params.arguments);
+    case 'game_parallax':
+      return await this.handleGameParallax(request.params.arguments);
+    case 'game_shape_2d':
+      return await this.handleGameShape2d(request.params.arguments);
+    case 'game_path_2d':
+      return await this.handleGamePath2d(request.params.arguments);
+    case 'game_physics_2d':
+      return await this.handleGamePhysics2d(request.params.arguments);
+    case 'game_animation_tree':
+      return await this.handleGameAnimationTree(request.params.arguments);
+    case 'game_animation_control':
+      return await this.handleGameAnimationControl(request.params.arguments);
+    case 'game_skeleton_ik':
+      return await this.handleGameSkeletonIk(request.params.arguments);
+    case 'game_audio_effect':
+      return await this.handleGameAudioEffect(request.params.arguments);
+    case 'game_audio_bus_layout':
+      return await this.handleGameAudioBusLayout(request.params.arguments);
+    case 'game_audio_spatial':
+      return await this.handleGameAudioSpatial(request.params.arguments);
+    // Batch 4: Editor/Headless + Localization + Resource
+    case 'rename_file':
+      return await this.handleRenameFile(request.params.arguments);
+    case 'manage_resource':
+      return await this.handleManageResource(request.params.arguments);
+    case 'validate_script':
+      return await this.handleValidateScript(request.params.arguments);
+    case 'validate_scripts':
+      return await this.handleValidateScripts(request.params.arguments);
+    case 'create_script':
+      return await this.handleCreateScript(request.params.arguments);
+    case 'manage_scene_signals':
+      return await this.handleManageSceneSignals(request.params.arguments);
+    case 'manage_layers':
+      return await this.handleManageLayers(request.params.arguments);
+    case 'manage_plugins':
+      return await this.handleManagePlugins(request.params.arguments);
+    case 'manage_shader':
+      return await this.handleManageShader(request.params.arguments);
+    case 'manage_theme_resource':
+      return await this.handleManageThemeResource(request.params.arguments);
+    case 'set_main_scene':
+      return await this.handleSetMainScene(request.params.arguments);
+    case 'manage_scene_structure':
+      return await this.handleManageSceneStructure(request.params.arguments);
+    case 'manage_translations':
+      return await this.handleManageTranslations(request.params.arguments);
+    case 'game_locale':
+      return await this.handleGameLocale(request.params.arguments);
+    // Batch 5: UI Controls + Rendering + Resource Runtime
+    case 'game_ui_control':
+      return await this.handleGameUiControl(request.params.arguments);
+    case 'game_ui_text':
+      return await this.handleGameUiText(request.params.arguments);
+    case 'game_ui_popup':
+      return await this.handleGameUiPopup(request.params.arguments);
+    case 'game_ui_tree':
+      return await this.handleGameUiTree(request.params.arguments);
+    case 'game_ui_item_list':
+      return await this.handleGameUiItemList(request.params.arguments);
+    case 'game_ui_tabs':
+      return await this.handleGameUiTabs(request.params.arguments);
+    case 'game_ui_menu':
+      return await this.handleGameUiMenu(request.params.arguments);
+    case 'game_ui_range':
+      return await this.handleGameUiRange(request.params.arguments);
+    case 'game_render_settings':
+      return await this.handleGameRenderSettings(request.params.arguments);
+    case 'game_resource':
+      return await this.handleGameResource(request.params.arguments);
+    // Batch 6: Visual Shader + Terrain + Video + CI/CD
+    case 'game_visual_shader':
+      return await this.handleGameVisualShader(request.params.arguments);
+    case 'game_terrain':
+      return await this.handleGameTerrain(request.params.arguments);
+    case 'game_video':
+      return await this.handleGameVideo(request.params.arguments);
+    case 'manage_ci_pipeline':
+      return await this.handleManageCiPipeline(request.params.arguments);
+    case 'manage_docker_export':
+      return await this.handleManageDockerExport(request.params.arguments);
         default:
-          throw new McpError(
-            ErrorCode.MethodNotFound,
-            `Unknown tool: ${request.params.name}`
-          );
-      }
+      throw new McpError(
+        ErrorCode.MethodNotFound,
+        `Unknown tool: ${request.params.name}`
+      );
+    }
     });
   }
 

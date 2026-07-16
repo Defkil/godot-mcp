@@ -558,6 +558,21 @@ The bridge binds only to `127.0.0.1` on an ephemeral per-run port. It refuses to
 | `GODOT_PATH` | Path to the Godot executable (overrides auto-detection) |
 | `DEBUG` | Set to `"true"` for detailed server-side logging |
 | `GODOT_MCP_ALLOWED_DIRS` | Allowed project roots (`;` or `,` separated on Windows; `:` or `,` on POSIX). The policy applies to every tool carrying a `projectPath` and to project-member file arguments. When unset, access is restricted to the MCP server's current working directory. |
+| `GODOT_MCP_CAPABILITY_PROFILE` | Capability profile that gates every `CallToolRequest`. Allowed values are `inspect-only`, `safe-mutations`, `runtime-control`, `legacy-full` and `unsafe-full`. Defaults to `legacy-full` so existing clients keep working; restrictive profiles deny tools by capability (inspect / edit / runtime / export / network / unsafe) before the handler runs and surface a structured `CapabilityDeniedError` with remediation. The `unsafe-full` profile is required to expose the arbitrary-script tools (`game_eval`, `game_call_method`, `game_script`, `attach_script`, `create_script`, `create_csharp_script`, `manage_ci_pipeline`, `manage_docker_export`, `validate_scripts`, ...). |
+
+### Capability profiles
+
+The capability policy uses a closed allowlist (no per-tool toggle, no runtime invention):
+
+| Profile | Capabilities granted | Notes |
+|---|---|---|
+| `inspect-only` | `inspect` | Read-only project/editor/runtime introspection. Every mutation is denied. |
+| `safe-mutations` | `inspect`, `edit` | Adds project file/scene/script writes but still refuses runtime control and arbitrary GDScript. |
+| `runtime-control` | `inspect`, `edit`, `runtime` | Adds `run_project`, `stop_project`, `launch_editor`, bounded input/playtest tools. |
+| `legacy-full` *(default)* | `inspect`, `edit`, `runtime`, `export`, `network` | Mirrors the pre-takeover permissive default so existing Wargrid/Heimdash clients keep working; still refuses `unsafe`. |
+| `unsafe-full` | `inspect`, `edit`, `runtime`, `export`, `network`, `unsafe` | Explicit opt-in for arbitrary-GDScript tools. |
+
+When a profile denies a tool, the server returns a structured MCP error without invoking the handler; the message names the tool, the missing capability, the active profile and a remediation hint.
 
 ## Architecture
 

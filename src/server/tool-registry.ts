@@ -6,6 +6,8 @@ export type ToolCapability =
   | 'network'
   | 'unsafe';
 
+export type CapabilityChecker = (name: string, required: ToolCapability) => void;
+
 export interface ToolInputSchema {
   type: 'object';
   properties: Record<string, unknown>;
@@ -26,6 +28,7 @@ export interface RegisteredToolDefinition extends ToolDefinition {
 
 export class ToolRegistry {
   private readonly tools = new Map<string, RegisteredToolDefinition>();
+  private capabilityCheck: CapabilityChecker | null = null;
 
   constructor(definitions: readonly RegisteredToolDefinition[] = []) {
     for (const definition of definitions) this.register(definition);
@@ -66,9 +69,23 @@ export class ToolRegistry {
     return this.tools.get(name)?.capability;
   }
 
+  /**
+   * Install a capability gate that is consulted for every dispatch. The gate
+   * receives the registered capability of the requested tool; if the active
+   * `CapabilityPolicy` does not grant that capability the gate throws
+   * `CapabilityDeniedError`. The registry never swallows the throw, so
+   * `CallToolRequest` propagates it as a structured MCP error envelope.
+   */
+  setCapabilityCheck(check: CapabilityChecker | null): void {
+    this.capabilityCheck = check;
+  }
+
   async dispatch(name: string, args: Record<string, unknown> | undefined): Promise<any> {
     const definition = this.tools.get(name);
     if (!definition) throw new Error(`Unknown registered tool: ${name}`);
+    if (this.capabilityCheck) {
+      this.capabilityCheck(name, definition.capability);
+    }
     return await definition.handler(args);
   }
 }
