@@ -93,7 +93,10 @@ func _init():
         _:
             log_error("Unknown operation: " + operation)
             quit(1)
-    
+
+    # Every successful operation ends with one machine-readable result marker.
+    # Human diagnostics remain separate so callers never infer success from text.
+    print("GODOT_MCP_RESULT=" + JSON.stringify({"operation": operation, "status": "ok"}))
     quit()
 
 # Logging functions

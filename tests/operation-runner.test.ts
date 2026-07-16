@@ -1,4 +1,7 @@
 import { EventEmitter } from 'node:events';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 import type { ChildProcessWithoutNullStreams, SpawnOptionsWithoutStdio } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -45,6 +48,37 @@ function createSpawner(child: FakeOperationProcess) {
 }
 
 describe('runHeadlessOperation', () => {
+  it('requires the checked-in Godot operations script to emit the typed success marker', async () => {
+    const scriptPath = fileURLToPath(new URL('../src/scripts/godot_operations.gd', import.meta.url));
+    const source = await readFile(path.resolve(scriptPath), 'utf8');
+
+    expect(source).toContain('GODOT_MCP_RESULT=');
+    expect(source).toContain('"operation": operation');
+    expect(source).toContain('"status": "ok"');
+  });
+
+  it('preserves human output while parsing the machine result marker', async () => {
+    const child = new FakeOperationProcess();
+    const running = runHeadlessOperation<{ operation: string; status: 'ok' }>({
+      godotPath: 'godot',
+      projectPath: '/project',
+      scriptPath: '/tools/operation.gd',
+      operation: 'create_scene',
+      params: {},
+      spawnProcess: createSpawner(child),
+      startupGraceMs: 1,
+      timeoutMs: 100,
+    });
+
+    child.writeStdout('human diagnostic\nGODOT_MCP_RESULT={"operation":"create_scene","status":"ok"}\n');
+    setTimeout(() => child.exit(0), 5);
+
+    const result = await running;
+    expect(result.result).toEqual({ operation: 'create_scene', status: 'ok' });
+    expect(result.stdout).toContain('human diagnostic');
+    expect(result.stdout).not.toContain('GODOT_MCP_RESULT=');
+  });
+
   it('uses argument-array process execution and parses the last typed result marker amid Godot noise', async () => {
     const child = new FakeOperationProcess();
     const spawnProcess = createSpawner(child);

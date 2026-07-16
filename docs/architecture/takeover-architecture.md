@@ -170,12 +170,7 @@ are separate diagnostics. TypeScript does not infer failure from whether stderr
 contains the English phrase `Failed to`. Mutations return affected paths/counts and
 verify expected postconditions.
 
-The TypeScript boundary now has a reusable streaming `operation-runner` foundation:
-it uses argument-array spawning, bounded stdout/stderr and argument sizes, startup
-error observation, a hard execution timeout with process-tree cleanup, exit-status
-checks, last-marker JSON parsing and optional operation-specific result validation.
-Legacy handlers have not yet migrated to it; each migration must first give its
-Godot-side mutation a typed result envelope and behavioral postcondition coverage.
+The runner emits a typed success marker after each successful operation. Its compatibility return value preserves human-readable stdout while filtering that marker; callers receive a truthful success response only after process exit, result parsing, and operation identity/status validation.
 
 ## Compatibility strategy
 

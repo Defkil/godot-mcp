@@ -55,6 +55,10 @@ import { allocateRuntimeCredentials, runtimeEnvironment } from './godot/runtime-
 import { listProjectFiles } from './tools/project/list-project-files.js';
 import { PACKAGE_VERSION } from './package-metadata.js';
 import { ToolRegistry } from './server/tool-registry.js';
+import {
+  HeadlessOperationError,
+  runHeadlessOperation,
+} from './godot/operation-runner.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -700,8 +704,7 @@ export class GodotServer {
     if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${projectPath}`);
 
     try {
-      const { stdout, stderr } = await this.executeOperation(operation, params, projectPath);
-      if (stderr && stderr.includes('Failed to')) return createErrorResponse(`${operation} failed: ${stderr}`);
+      const { stdout } = await this.executeOperation(operation, params, projectPath);
       return { content: [{ type: 'text', text: `${operation} succeeded.\n\nOutput: ${stdout}` }] };
     } catch (error: any) {
       return createErrorResponse(`${operation} failed: ${error?.message || 'Unknown error'}`);
@@ -709,26 +712,20 @@ export class GodotServer {
   }
 
   /**
-   * Execute a Godot operation using the operations script
-   * @param operation The operation to execute
-   * @param params The parameters for the operation
-   * @param projectPath The path to the Godot project
-   * @returns The stdout and stderr from the operation
+   * @returns The bounded diagnostics and typed success result from the operation
    */
   private async executeOperation(
     operation: string,
     params: OperationParams,
     projectPath: string
-  ): Promise<{ stdout: string; stderr: string }> {
+  ): Promise<{ stdout: string; stderr: string; result: { operation: string; status: 'ok' } }> {
     this.logDebug(`Executing operation: ${operation} in project: ${projectPath}`);
     this.logDebug(`Original operation params: ${JSON.stringify(params)}`);
 
-    // Convert camelCase parameters to snake_case for Godot script
+    // Convert camelCase parameters to snake_case for Godot script.
     const snakeCaseParams = convertCamelToSnakeCase(params);
     this.logDebug(`Converted snake_case params: ${JSON.stringify(snakeCaseParams)}`);
 
-
-    // Ensure godotPath is set
     if (!this.godotPath) {
       await this.detectGodotPath();
       if (!this.godotPath) {
@@ -737,41 +734,37 @@ export class GodotServer {
     }
 
     try {
-      // Serialize the snake_case parameters to a valid JSON string
-      const paramsJson = JSON.stringify(snakeCaseParams);
-
-      // Build argument array for execFile to prevent command injection
-      // Using execFile with argument arrays avoids shell interpretation entirely
-      const args = [
-        '--headless',
-        '--path',
-        projectPath,  // Safe: passed as argument, not interpolated into shell command
-        '--script',
-        this.operationsScriptPath,
+      const execution = await runHeadlessOperation<{ operation: string; status: 'ok' }>({
+        godotPath: this.godotPath,
+        projectPath,
+        scriptPath: this.operationsScriptPath,
         operation,
-        paramsJson,  // Safe: passed as argument, not interpreted by shell
-      ];
+        params: snakeCaseParams,
+        debugGodot: GODOT_DEBUG_MODE,
+        parseResult: value => {
+          if (
+            !value ||
+            typeof value !== 'object' ||
+            (value as { operation?: unknown }).operation !== operation ||
+            (value as { status?: unknown }).status !== 'ok'
+          ) {
+            throw new Error(`Expected a successful result for operation ${operation}.`);
+          }
+          return value as { operation: string; status: 'ok' };
+        },
+      });
 
-
-      if (GODOT_DEBUG_MODE) {
-        args.push('--debug-godot');
-      }
-
-      this.logDebug(`Executing: ${this.godotPath} ${args.join(' ')}`);
-
-      const { stdout, stderr } = await execFileAsync(this.godotPath!, args);
-
-      return { stdout: stdout ?? '', stderr: stderr ?? '' };
+      return {
+        stdout: execution.stdout.filter(line => !line.startsWith('GODOT_MCP_RESULT=')).join('\n'),
+        stderr: execution.stderr.join('\n'),
+        result: execution.result,
+      };
     } catch (error: unknown) {
-      // If execFileAsync throws, it still contains stdout/stderr
-      if (error instanceof Error && 'stdout' in error && 'stderr' in error) {
-        const execError = error as Error & { stdout: string; stderr: string };
-        return {
-          stdout: execError.stdout ?? '',
-          stderr: execError.stderr ?? '',
-        };
+      if (error instanceof HeadlessOperationError) {
+        const diagnostics = [...error.stderr, ...error.stdout].filter(line => line.trim());
+        const detail = diagnostics.length > 0 ? `\n${diagnostics.join('\n')}` : '';
+        throw new Error(`${error.message}${detail}`, { cause: error });
       }
-
       throw error;
     }
   }
@@ -4268,13 +4261,7 @@ export class GodotServer {
       };
 
       // Execute the operation
-      const { stdout, stderr } = await this.executeOperation('create_scene', params, projectPath);
-
-      if (stderr && stderr.includes('Failed to')) {
-        return createErrorResponse(
-          `Failed to create scene: ${stderr}`
-        );
-      }
+      const { stdout } = await this.executeOperation('create_scene', params, projectPath);
 
       return {
         content: [
@@ -4349,13 +4336,7 @@ export class GodotServer {
       }
 
       // Execute the operation
-      const { stdout, stderr } = await this.executeOperation('add_node', params, projectPath);
-
-      if (stderr && stderr.includes('Failed to')) {
-        return createErrorResponse(
-          `Failed to add node: ${stderr}`
-        );
-      }
+      const { stdout } = await this.executeOperation('add_node', params, projectPath);
 
       return {
         content: [
@@ -4429,13 +4410,7 @@ export class GodotServer {
       };
 
       // Execute the operation
-      const { stdout, stderr } = await this.executeOperation('load_sprite', params, args.projectPath);
-
-      if (stderr && stderr.includes('Failed to')) {
-        return createErrorResponse(
-          `Failed to load sprite: ${stderr}`
-        );
-      }
+      const { stdout } = await this.executeOperation('load_sprite', params, args.projectPath);
 
       return {
         content: [
@@ -4504,13 +4479,7 @@ export class GodotServer {
       }
 
       // Execute the operation
-      const { stdout, stderr } = await this.executeOperation('export_mesh_library', params, args.projectPath);
-
-      if (stderr && stderr.includes('Failed to')) {
-        return createErrorResponse(
-          `Failed to export mesh library: ${stderr}`
-        );
-      }
+      const { stdout } = await this.executeOperation('export_mesh_library', params, args.projectPath);
 
       return {
         content: [
@@ -4581,13 +4550,7 @@ export class GodotServer {
       }
 
       // Execute the operation
-      const { stdout, stderr } = await this.executeOperation('save_scene', params, args.projectPath);
-
-      if (stderr && stderr.includes('Failed to')) {
-        return createErrorResponse(
-          `Failed to save scene: ${stderr}`
-        );
-      }
+      const { stdout } = await this.executeOperation('save_scene', params, args.projectPath);
 
       const savePath = args.newPath || args.scenePath;
       return {
@@ -4667,13 +4630,7 @@ export class GodotServer {
       };
 
       // Execute the operation
-      const { stdout, stderr } = await this.executeOperation('get_uid', params, args.projectPath);
-
-      if (stderr && stderr.includes('Failed to')) {
-        return createErrorResponse(
-          `Failed to get UID: ${stderr}`
-        );
-      }
+      const { stdout } = await this.executeOperation('get_uid', params, args.projectPath);
 
       return {
         content: [

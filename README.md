@@ -545,7 +545,7 @@ Create `.cursor/mcp.json` in your project:
 
 `run_project` installs the runtime bridge as a reversible transaction, starts Godot with per-session credentials, waits for an authenticated readiness handshake, and restores the original project bytes when the process stops. Existing user-managed `McpInteractionServer` autoloads are preserved, but they must use the bridge script shipped with the same server version.
 
-The bridge binds only to `127.0.0.1` on an ephemeral per-run port. It refuses to start without a high-entropy session token, authenticates before accepting commands, rejects additional clients, and enforces request/response buffer limits. Port and token are passed only to the child process environment; they are not returned through MCP responses.
+The bridge binds only to `127.0.0.1` on an ephemeral per-run port. It refuses to start without a high-entropy session token, authenticates before accepting commands, rejects additional clients, and enforces request/response buffer limits. The port and token are kept in the child process environment and are not included in the successful `run_project` response; the port is used internally by the server to establish the authenticated bridge connection.
 
 ## Environment Variables
 
