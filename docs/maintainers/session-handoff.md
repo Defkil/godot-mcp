@@ -4,10 +4,10 @@
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/senior-takeover`
 - Remote: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Last commit: `5565d6e` (`refactor: migrate headless scene tools to the typed registry`).
-- Worktree: dirty with the capability-policy enforcement package; pending fix to `manage_autoloads` capability classification, wire-level gate test, README + issue-inventory update, and commit.
+- Last commit: `24651c8` (`feat: enforce capability profiles at the tools/call boundary`).
+- Worktree: clean.
 
-## Package in progress (this tick)
+## Package shipped (this tick)
 
 Closed-list capability profiles gate every `CallToolRequest`:
 
