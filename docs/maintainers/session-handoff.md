@@ -4,9 +4,9 @@
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/senior-takeover`
 - Remote: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Last commit: `973b627` (`feat: expose bounded classdb_inspect tool`).
-- Worktree: clean.
-- Vitest: 27 files, 606 tests passing.
+- Last commit: `c60c50f` (`docs: record NeuralWatt REJECT verdict for capability-policy range`).
+- Worktree: dirty (4 files; `fix: reclassify six state-mutating legacy tools per NeuralWatt REJECT`, ready to commit).
+- Vitest: 27 files, 619 tests passing on the dirty tree (after reclassification fix).
 
 ## Packages landed since the last NeuralWatt review (commit 5565d6e)
 
@@ -129,3 +129,33 @@ and dispatched to AGY (`godot-mcp-repair-48b921f.md`). The repair must:
 
 Do not advance to any other package until the REJECT is repaired and
 re-reviewed.
+
+## Repair in progress (this tick)
+
+Reclassification applied locally, no commit yet:
+
+- `src/security/legacy-capabilities.ts` — `manage_plugins` and
+  `manage_translations` reclassified `unsafe`; `manage_scene_signals`,
+  `manage_layers`, `manage_scene_structure`, `manage_input_map`
+  reclassified `edit`. The closed-list `comm -23` coverage check
+  against `src/server.ts` `case` literals still returns zero gaps; the
+  reviewer-bound map stays exhaustive.
+- `tests/capability-gate.test.ts` — 13 new wire-level tests covering
+  inspect-only denial of all six, unsafe-full admission, safe-mutations
+  admission of the four edit-class tools, and `legacy-full` denial of
+  the two unsafe-class tools.
+- `docs/maintainers/issue-inventory.md:32` — `157` → `158`.
+- `docs/architecture/takeover-architecture.md:21` — `157` → `158`.
+
+Gates re-run locally on the dirty tree:
+
+- `npx tsc --noEmit`: clean.
+- `npm run build`: passed.
+- `npx vitest run`: 27 files, 619 tests passed (+13 new wire-level tests).
+- `npx vitest run tests/capability-gate.test.ts tests/capability-policy.test.ts tests/schema-parity.test.ts`: 38 tests passed.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check HEAD~3..HEAD`: clean.
+
+Next action: stage the four owned files, commit as one focused
+`fix:` commit on top of `c60c50f`, then re-trigger NeuralWatt review
+of `c60c50f..<new HEAD>`.

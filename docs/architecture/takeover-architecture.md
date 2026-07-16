@@ -18,7 +18,7 @@ Ordered by priority:
 3. **Truthful diagnostics:** startup, Godot parse/import/runtime errors and partial operations reach the caller as structured failures.
 4. **Determinism:** tool schemas, dispatch and implementation stay in parity; repeated calls have documented idempotency.
 5. **Portability:** native Windows, Linux and macOS paths and Godot 4.4–4.7 are first-class.
-6. **Agent efficiency:** bounded output and an optional compact tool facade avoid sending 157 schemas when a client does not need them.
+6. **Agent efficiency:** bounded output and an optional compact tool facade avoid sending 158 schemas when a client does not need them.
 7. **Extensibility:** adding a tool does not require editing a multi-thousand-line switch in several languages.
 8. **Open-source operability:** reproducible package/release artifacts, preserved MIT attribution and no private infrastructure dependency.
 

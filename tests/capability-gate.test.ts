@@ -192,3 +192,182 @@ describe('CapabilityPolicy at the MCP tools/call boundary', () => {
     expect(() => policy.assertAllowed('any_tool', 'edit')).toThrow(CapabilityDeniedError);
   });
 });
+
+describe('CapabilityPolicy: legacy tool classification matches actual side effects', () => {
+  // The following tools were previously misclassified as 'inspect' despite
+  // mutating project.godot or scene files, breaking the read-only contract
+  // of the 'inspect-only' profile. These tests pin the corrected
+  // classification at the wire level.
+
+  const unsafeLegacyTools = ['manage_plugins', 'manage_translations'] as const;
+  for (const toolName of unsafeLegacyTools) {
+    it(`denies ${toolName} (unsafe) to inspect-only, safe-mutations, runtime-control, and legacy-full`, async () => {
+      const { root } = makeProject();
+      for (const profile of ['inspect-only', 'safe-mutations', 'runtime-control', 'legacy-full'] as const) {
+        const server = new GodotServer({
+          registerSignalHandlers: false,
+          godotPath: '/usr/bin/godot',
+          runtimeConnector: () => new Promise(() => undefined),
+          runtimeConnectInitialDelayMs: 5,
+          pathPolicy: new PathPolicy([root]),
+          capabilityPolicy: new CapabilityPolicy(profile),
+        });
+
+        const response = await requestHandler(server, 'tools/call')(
+          {
+            method: 'tools/call',
+            params: {
+              name: toolName,
+              arguments: { projectPath: root, action: 'list' },
+            },
+          },
+          {},
+        );
+
+        expect(response.isError).toBe(true);
+        const text = response.content[0].text as string;
+        expect(text).toContain('Capability denied');
+        expect(text).toContain(toolName);
+        expect(text).toContain('unsafe');
+        expect(text).toContain(profile);
+      }
+    });
+
+    it(`admits ${toolName} (unsafe) under unsafe-full operator opt-in`, async () => {
+      const { root } = makeProject();
+      const server = new GodotServer({
+        registerSignalHandlers: false,
+        godotPath: '/usr/bin/godot',
+        runtimeConnector: () => new Promise(() => undefined),
+        runtimeConnectInitialDelayMs: 5,
+        pathPolicy: new PathPolicy([root]),
+        capabilityPolicy: new CapabilityPolicy('unsafe-full'),
+      });
+
+      const response = await requestHandler(server, 'tools/call')(
+        {
+          method: 'tools/call',
+          params: {
+            name: toolName,
+            arguments: { projectPath: root, action: 'list' },
+          },
+        },
+        {},
+      );
+
+      const text = JSON.stringify(response);
+      // Capability gate must not produce a CapabilityDeniedError; downstream
+      // errors come from the path policy or handler (e.g. missing addons dir).
+      expect(text).not.toMatch(/Capability denied/i);
+    });
+  }
+
+  const editLegacyTools = [
+    'manage_scene_signals',
+    'manage_layers',
+    'manage_scene_structure',
+    'manage_input_map',
+  ] as const;
+  for (const toolName of editLegacyTools) {
+    it(`denies ${toolName} (edit) under inspect-only`, async () => {
+      const { root } = makeProject();
+      const server = new GodotServer({
+        registerSignalHandlers: false,
+        godotPath: '/usr/bin/godot',
+        runtimeConnector: () => new Promise(() => undefined),
+        runtimeConnectInitialDelayMs: 5,
+        pathPolicy: new PathPolicy([root]),
+        capabilityPolicy: new CapabilityPolicy('inspect-only'),
+      });
+
+      const response = await requestHandler(server, 'tools/call')(
+        {
+          method: 'tools/call',
+          params: {
+            name: toolName,
+            arguments: { projectPath: root, action: 'list' },
+          },
+        },
+        {},
+      );
+
+      expect(response.isError).toBe(true);
+      const text = response.content[0].text as string;
+      expect(text).toContain('Capability denied');
+      expect(text).toContain(toolName);
+      expect(text).toContain('edit');
+      expect(text).toContain('inspect-only');
+    });
+
+    it(`admits ${toolName} (edit) under safe-mutations`, async () => {
+      const { root } = makeProject();
+      const server = new GodotServer({
+        registerSignalHandlers: false,
+        godotPath: '/usr/bin/godot',
+        runtimeConnector: () => new Promise(() => undefined),
+        runtimeConnectInitialDelayMs: 5,
+        pathPolicy: new PathPolicy([root]),
+        capabilityPolicy: new CapabilityPolicy('safe-mutations'),
+      });
+
+      const response = await requestHandler(server, 'tools/call')(
+        {
+          method: 'tools/call',
+          params: {
+            name: toolName,
+            arguments: { projectPath: root, action: 'list' },
+          },
+        },
+        {},
+      );
+
+      const text = JSON.stringify(response);
+      // Capability gate must not block edit-class tools under safe-mutations.
+      expect(text).not.toMatch(/Capability denied/i);
+    });
+  }
+
+  it('legacy-full admits all six reclassified tools (none are unsafe-blocked)', async () => {
+    const { root } = makeProject();
+    const allSix = [
+      'manage_plugins',
+      'manage_translations',
+      'manage_scene_signals',
+      'manage_layers',
+      'manage_scene_structure',
+      'manage_input_map',
+    ];
+    for (const toolName of allSix) {
+      const server = new GodotServer({
+        registerSignalHandlers: false,
+        godotPath: '/usr/bin/godot',
+        runtimeConnector: () => new Promise(() => undefined),
+        runtimeConnectInitialDelayMs: 5,
+        pathPolicy: new PathPolicy([root]),
+        capabilityPolicy: new CapabilityPolicy('legacy-full'),
+      });
+
+      const response = await requestHandler(server, 'tools/call')(
+        {
+          method: 'tools/call',
+          params: {
+            name: toolName,
+            arguments: { projectPath: root, action: 'list' },
+          },
+        },
+        {},
+      );
+
+      const text = JSON.stringify(response);
+      // legacy-full omits 'unsafe', so manage_plugins and manage_translations
+      // MUST still be denied here — they are the ones the docstring calls out
+      // as arbitrary-GDScript execution paths.
+      if (toolName === 'manage_plugins' || toolName === 'manage_translations') {
+        expect(text).toMatch(/Capability denied/i);
+      } else {
+        // The four edit-class tools must reach the handler.
+        expect(text).not.toMatch(/Capability denied/i);
+      }
+    }
+  });
+});
