@@ -1920,28 +1920,25 @@ describe('executeOperation parameter conversion', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 10. Switch statement dispatch
+// 10. Tool dispatch routing
 // ---------------------------------------------------------------------------
-describe('Tool dispatch switch statement', () => {
+describe('Tool dispatch routing', () => {
   it('has a default case that throws McpError', () => {
     expect(sourceCode).toContain("throw new McpError(");
     expect(sourceCode).toContain("ErrorCode.MethodNotFound");
     expect(sourceCode).toContain("Unknown tool:");
   });
 
-  it('every case returns await this.handle*', () => {
+  it('routes every remaining legacy case to a handler', () => {
     const caseRegex = /case '(\w+)':\s*\n\s*return await this\.handle/g;
     const matches = [...sourceCode.matchAll(caseRegex)];
-    // Should match all 157 tools
-    expect(matches.length).toBe(157);
+    expect(matches.length).toBe(156);
   });
 
-  it('no case falls through without return', () => {
-    // Each case should have "return await" — no break statements
-    const switchBlock = sourceCode.substring(
-      sourceCode.indexOf("switch (request.params.name)"),
-      sourceCode.indexOf("default:")
-    );
+  it('does not let a legacy case fall through', () => {
+    const switchStart = sourceCode.indexOf("switch (request.params.name)");
+    const defaultStart = sourceCode.indexOf('        default:', switchStart);
+    const switchBlock = sourceCode.substring(switchStart, defaultStart);
     const caseStatements = switchBlock.match(/case '[^']+'/g) || [];
     const returnStatements = switchBlock.match(/return await/g) || [];
     expect(returnStatements.length).toBe(caseStatements.length);

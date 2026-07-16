@@ -54,6 +54,7 @@ import { createUidResaveParams, parseUidResaveSummary } from './godot/uid-resave
 import { allocateRuntimeCredentials, runtimeEnvironment } from './godot/runtime-credentials.js';
 import { listProjectFiles } from './tools/project/list-project-files.js';
 import { PACKAGE_VERSION } from './package-metadata.js';
+import { ToolRegistry } from './server/tool-registry.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -128,6 +129,7 @@ interface GameConnection {
  */
 export class GodotServer {
   private server: Server;
+  private readonly toolRegistry = new ToolRegistry();
   private activeProcess: GodotProcess | null = null;
   private lastProcessDiagnostics: GodotProcessDiagnostics | null = null;
   private godotPath: string | null = null;
@@ -896,6 +898,32 @@ export class GodotServer {
    * Set up the tool handlers for the MCP server
    */
   private setupToolHandlers() {
+    this.toolRegistry.register({
+      name: 'list_project_files',
+      description: 'List project files, optionally filtered by extension',
+      capability: 'inspect',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Godot project path',
+          },
+          extensions: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional file extensions to filter by (e.g., [".gd", ".tscn"]). Include the dot.',
+          },
+          subdirectory: {
+            type: 'string',
+            description: 'Optional subdirectory to search in (e.g., "scripts/player")',
+          },
+        },
+        required: ['projectPath'],
+      },
+      handler: args => this.handleListProjectFiles(args),
+    });
+
     // Define available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
@@ -1539,30 +1567,8 @@ export class GodotServer {
             required: ['projectPath', 'section', 'key', 'value'],
           },
         },
+        ...this.toolRegistry.definitions(),
         {
-          name: 'list_project_files',
-          description: 'List project files, optionally filtered by extension',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Godot project path',
-              },
-              extensions: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Optional file extensions to filter by (e.g., [".gd", ".tscn"]). Include the dot.',
-              },
-              subdirectory: {
-                type: 'string',
-                description: 'Optional subdirectory to search in (e.g., "scripts/player")',
-              },
-            },
-            required: ['projectPath'],
-          },
-        },
-{
           name: 'game_connect_signal',
           description: 'Connect a signal from one node to a method on another node in the running game',
           inputSchema: {
@@ -3391,6 +3397,12 @@ export class GodotServer {
         const message = error instanceof Error ? error.message : 'Invalid tool path arguments.';
         return createErrorResponse(`Path policy rejected ${request.params.name}: ${message}`);
       }
+      if (this.toolRegistry.has(request.params.name)) {
+        return await this.toolRegistry.dispatch(
+          request.params.name,
+          request.params.arguments as Record<string, unknown> | undefined,
+        );
+      }
       switch (request.params.name) {
         case 'launch_editor':
           return await this.handleLaunchEditor(request.params.arguments);
@@ -3467,8 +3479,6 @@ export class GodotServer {
           return await this.handleReadProjectSettings(request.params.arguments);
         case 'modify_project_settings':
           return await this.handleModifyProjectSettings(request.params.arguments);
-        case 'list_project_files':
-          return await this.handleListProjectFiles(request.params.arguments);
         // New runtime signal/animation/group tools
         case 'game_connect_signal':
           return await this.handleGameConnectSignal(request.params.arguments);

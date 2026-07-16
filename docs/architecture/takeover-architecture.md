@@ -71,6 +71,11 @@ handler and stability metadata. The flat MCP list, compact facade, dispatcher pa
 test and generated reference documentation derive from that registry. A tool cannot
 be advertised without a handler.
 
+Migration is incremental: `list_project_files` is the first registered tool and is
+merged into the legacy flat list at its existing position. Its advertised schema,
+capability and executable handler now share one registration, while the other 156
+contracts remain on the legacy switch until each has equivalent behavioral coverage.
+
 The existing flat tool names remain available. A compact mode groups discovery and
 low-frequency operations without deleting the stable flat API. Compact mode is
 opt-in until real client and Wargrid compatibility is proven.
