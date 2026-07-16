@@ -4,42 +4,40 @@
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/senior-takeover`
 - Remote: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Last commit: `24651c8` (`feat: enforce capability profiles at the tools/call boundary`).
-- Worktree: clean.
+- Last commit: `db6450b` (`docs: record capability-policy package as shipped in handoff`).
+- Worktree: dirty — in-flight `classdb_inspect` package staged for this tick.
 
 ## Package shipped (this tick)
 
-Closed-list capability profiles gate every `CallToolRequest`:
+Bounded read-only ClassDB introspection (`classdb_inspect`) closes
+[Coding-Solo#98](https://github.com/Coding-Solo/godot-mcp/issues/98):
 
-- `src/security/capability-policy.ts` — `CapabilityPolicy`, `CapabilityDeniedError`, `parseCapabilityProfile`, `resolveCapabilityPolicyFromEnvironment` (default `legacy-full`, opt-in `unsafe-full`).
-- `src/security/legacy-capabilities.ts` — `LEGACY_TOOL_CAPABILITIES` map covering every legacy `case` name plus `capabilityForLegacyTool(name)`. Repairs the `manage_autoloads` gap that previously let it bypass strict profiles.
-- `src/server/tool-registry.ts` — registry now keeps a `setCapabilityCheck` gate; `dispatch()` consults it before invoking the registered handler.
-- `src/server.ts` — constructor installs a gate that calls `CapabilityPolicy.assertAllowed`; `CallToolRequestSchema` consults the registry dispatch first, then `capabilityForLegacyTool(name)` for the legacy case path. `CapabilityDeniedError` is caught locally and surfaced as a structured MCP `isError: true` envelope with remediation.
-- `tests/capability-policy.test.ts` — 13 unit tests covering profiles, env resolution, structured error and message hygiene.
-- `tests/capability-gate.test.ts` — 6 wire-level MCP `tools/call` tests: `inspect-only` reaches `get_godot_version`, `inspect-only` blocks `manage_autoloads`, every non-`unsafe-full` profile blocks `game_eval`, `unsafe-full` reaches `attach_script`, and `inspect-only` blocks `modify_project_settings` through the registry path.
-- `README.md` — `GODOT_MCP_CAPABILITY_PROFILE` documented in the environment table plus a dedicated *Capability profiles* table.
-- `docs/maintainers/issue-inventory.md` — `#97 policy enforcement` row updated to reflect capability-profile coverage (rate/size limits remain as follow-up).
+- `src/tools/script/classdb-inspect.ts` (new) — focused tool module: `validateClassdbInspectInput` rejects path-shaped and extension-bearing `className` values; `classdbInspect` resolves the project through `PathPolicy.assertProject`, forwards one headless `classdb_inspect` operation, and surfaces typed `status: error` postcondition failures as a structured MCP error envelope.
+- `src/server.ts` — registers `classdb_inspect` with capability `inspect`, `inputSchema` requiring `projectPath` + `className`; thin wrapper delegates to the focused module through `classdbInspectContext()`, which forwards a `ClassdbInspectRunner` wrapping the shared `executeOperation` (so the typed `status: error` envelope is interpreted through the same machinery as every other headless tool).
+- `src/scripts/godot_operations.gd` — new `classdb_inspect` operation: walks the parent chain (bounded at 16) and reports methods, properties, signals, enums and integer constants for the target class. Missing or unknown class names record a typed `_postcondition_failure` so the typed `status: error` envelope propagates.
+- `tests/classdb-inspect.test.ts` (new) — 10 tests: input validation (non-object, missing fields, path/extension rejection, identifier acceptance), focused runner (forwards canonical params + project path), renderer (typed postcondition error → `isError`), and four wire-level MCP `tools/list` / `tools/call` tests covering the registry entry, the capability assignment, malformed-className rejection through the server wrapper, and stubbed-runner dispatch.
+- `tests/schema-parity.test.ts` — `157` → `158` to reflect the new tool, plus explicit checks that `classdb_inspect` is advertised exactly once and registered with capability `inspect`.
+- `README.md` — three explicit `157` count claims updated to `158`; the `Runtime Inspection` table bumped from `(3 tools)` to `(4 tools)` with the new row.
+- `docs/maintainers/issue-inventory.md` — `[Coding-Solo#98] ClassDB access` row promoted from `open` to `verified` with a disposition describing the focused module, identifier guard, registry capability and test coverage.
 
 ## Verification
 
 - `npx tsc --noEmit`: clean.
-- `npm run build`: passed; TypeScript compiled and Godot scripts copied to `build/scripts`.
-- `npx vitest run`: 26 files, 596 tests passed (was 574 at scene-tool commit; +22 from this package: 13 policy unit + 6 gate wire-level + 3 in the registry tests that consume the gate).
+- `npm run build`: passed; TypeScript compiled and Godot scripts copied to `build/scripts` (`build/tools/script/classdb-inspect.js` is 3.4 kB).
+- `npx vitest run`: 27 files, 606 tests passed (was 596 at the capability-policy commit; +10 from this package). The new file accounts for every test delta; no other file was modified by the worker.
+- `npx vitest run tests/classdb-inspect.test.ts tests/schema-parity.test.ts`: 2 files, 13 tests passed.
 - `npm audit --audit-level=high`: 0 vulnerabilities.
-- `git diff --check`: clean.
-- `npm pack --dry-run`: 29 files, ~131 KB; `build/security/capability-policy.js` and `build/security/legacy-capabilities.js` are present.
-- Godot 4.7 (`Godot_v4.7-stable_win64.exe`) `--headless --editor --quit`: clean (no new `.gd` files, but the editor re-imports the project).
+- `git diff --check`: clean (only LF→CRLF warnings on the edited `.gd` and `.ts` files, as expected for this Windows-rescued checkout under `core.autocrlf=true`).
+- `npm pack --dry-run`: 30 files, 133.5 kB packed; `build/tools/script/classdb-inspect.js` is included.
+- `comm -23 <(grep -oP "case '\\K[a-z_]+(?=')" src/server.ts | sort -u) <(awk '/^export const LEGACY_TOOL_CAPABILITIES/,/^};/' src/security/legacy-capabilities.ts | grep -oP "^  \K[a-z_]+(?=:)" | sort -u)` returns 0 lines — every legacy `case` literal remains mapped after the registry expansion.
 
 ## Next safe action
 
-Commit the capability-policy enforcement as one focused package
-(`feat: enforce capability profiles at the tools/call boundary`) and update the
-dirty-state line above to `Worktree: clean`. Then return to the remaining open
-rows in `docs/maintainers/issue-inventory.md`. Candidate follow-ups:
+Commit the in-flight package as one focused commit
+(`feat: expose bounded classdb_inspect tool`). Then return to the remaining
+open / partial rows in `docs/maintainers/issue-inventory.md`. Candidate follow-ups:
 
-- Rate / size / concurrency limits at the gate (the second half of `#97`).
-- Real `.tscn` round-trip on a real Godot fixture (closes the remaining
-  `tugcantopaloglu#8` and `#13` evidence).
-- Tween `Vector2` / `Vector3` / `Color` regression on a running bridge
-  (`tugcantopaloglu#11`).
+- Real `.tscn` round-trip on a real Godot fixture (closes the remaining `tugcantopaloglu#8` and `#13` evidence).
+- Tween `Vector2` / `Vector3` / `Color` regression on a running bridge (`tugcantopaloglu#11`).
 - `game_wait` physics-frame verification (`tugcantopaloglu#14`).
+- Rate / size / concurrency limits at the gate (the second half of `#97`).

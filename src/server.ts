@@ -86,6 +86,12 @@ import {
   type SceneOperationRunner,
   type SceneToolContext,
 } from './tools/scene/_shared.js';
+import {
+  classdbInspect,
+  validateClassdbInspectInput,
+  type ClassdbInspectContext,
+  type ClassdbInspectRunner,
+} from './tools/script/classdb-inspect.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -1060,9 +1066,33 @@ export class GodotServer {
       handler: args => this.handleRemoveSceneNode(args),
     });
 
+    this.toolRegistry.register({
+      name: 'classdb_inspect',
+      description:
+        'Inspect a Godot class (methods, properties, signals, enums).',
+      capability: 'inspect',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Godot project path',
+          },
+          className: {
+            type: 'string',
+            description:
+                          'Godot class identifier (e.g. Sprite2D, Node). Variants are not in ClassDB.',
+          },
+        },
+        required: ['projectPath', 'className'],
+      },
+      handler: args => this.handleClassdbInspect(args),
+    });
+
     // Define available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
+
         {
           name: 'run_project',
           description: 'Run the Godot project and capture output',
@@ -4836,6 +4866,54 @@ export class GodotServer {
       return await removeSceneNode(input, this.sceneToolContext());
     } catch (error) {
       return createToolModuleErrorResponse('remove_scene_node', error);
+    }
+  }
+
+  /**
+   * Resolve a `ClassdbInspectContext` for the focused
+   * `src/tools/script/classdb-inspect.ts` module. The context reuses
+   * the server's existing `pathPolicy` and forwards a runner that
+   * delegates to `executeOperation` so the typed result envelope is
+   * interpreted through the same machinery as every other headless
+   * tool. Wire-level tests can override this method through
+   * `(server as any).classdbInspectContext = ...` to inject a
+   * scripted runner.
+   */
+  private classdbInspectContext(): ClassdbInspectContext {
+    const runner: ClassdbInspectRunner = {
+      run: async (operation, params, projectPath) => {
+        const executed = await this.executeOperation(
+          operation,
+          params as OperationParams,
+          projectPath,
+        );
+        return {
+          stdout: executed.stdout,
+          stderr: executed.stderr,
+          result: executed.result,
+        };
+      },
+    };
+    return {
+      pathPolicy: this.pathPolicy,
+      operationRunner: runner,
+    };
+  }
+
+  /**
+   * Handle the `classdb_inspect` tool — thin wrapper around the focused
+   * `src/tools/script/classdb-inspect.ts` module. Validates the
+   * `className` identifier, resolves the project through `PathPolicy`,
+   * forwards a single headless ClassDB query, and surfaces typed
+   * `status: error` postcondition failures as a structured MCP error
+   * envelope.
+   */
+  private async handleClassdbInspect(args: any) {
+    try {
+      const input = validateClassdbInspectInput(normalizeParameters(args || {}));
+      return await classdbInspect(input, this.classdbInspectContext());
+    } catch (error) {
+      return createToolModuleErrorResponse('classdb_inspect', error);
     }
   }
 

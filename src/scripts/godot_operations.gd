@@ -101,6 +101,8 @@ func _init():
             manage_theme_resource(params)
         "manage_scene_structure":
             manage_scene_structure(params)
+        "classdb_inspect":
+            classdb_inspect(params)
         _:
             log_error("Unknown operation: " + operation)
             quit(1)
@@ -1944,3 +1946,82 @@ func _is_ancestor(node, maybe_descendant):
             return true
         n = n.get_parent()
     return false
+
+
+func classdb_inspect(params):
+    var target_class = String(params.get("class_name", ""))
+    if target_class == "":
+        _record_postcondition_failure("classdb_inspect: 'class_name' is required.")
+        return
+    if not ClassDB.class_exists(target_class):
+        _record_postcondition_failure("classdb_inspect: unknown class '%s'." % target_class)
+        return
+    var methods: Array = []
+    var property_entries: Array = []
+    var signal_entries: Array = []
+    var enum_entries: Array = []
+    var inherited = target_class
+    var parent_chain: Array = []
+    var max_inheritance_depth = 16
+    var depth = 0
+    while inherited != "" and depth < max_inheritance_depth:
+        parent_chain.append(inherited)
+        inherited = ClassDB.get_parent_class(inherited)
+        depth += 1
+    for raw_method in ClassDB.class_get_method_list(target_class, true):
+        if not (raw_method is Dictionary) or not raw_method.has("name"):
+            continue
+        var arg_list: Array = []
+        for arg in raw_method.get("args", []):
+            if not (arg is Dictionary) or not arg.has("name"):
+                continue
+            arg_list.append({
+                "name": String(arg["name"]),
+                "type": String(arg.get("type", 0)),
+            })
+        var method_entry: Dictionary = {"name": String(raw_method["name"]), "args": arg_list}
+        if raw_method.has("return") and raw_method["return"] is Dictionary and raw_method["return"].has("name"):
+            method_entry["return"] = String(raw_method["return"]["name"])
+        methods.append(method_entry)
+    for raw_property in ClassDB.class_get_property_list(target_class, true):
+        if not (raw_property is Dictionary) or not raw_property.has("name"):
+            continue
+        property_entries.append({
+            "name": String(raw_property["name"]),
+            "type": String(raw_property.get("type", 0)),
+        })
+    for raw_signal in ClassDB.class_get_signal_list(target_class, true):
+        if not (raw_signal is Dictionary) or not raw_signal.has("name"):
+            continue
+        var sig_args: Array = []
+        for arg in raw_signal.get("args", []):
+            if arg is Dictionary and arg.has("name"):
+                sig_args.append({
+                    "name": String(arg["name"]),
+                    "type": String(arg.get("type", 0)),
+                })
+        signal_entries.append({
+            "name": String(raw_signal["name"]),
+            "args": sig_args,
+        })
+    for enum_name in ClassDB.class_get_enum_list(target_class, true):
+        enum_entries.append({
+            "name": String(enum_name),
+            "values": ClassDB.class_get_enum_constants(target_class, enum_name, true),
+        })
+    var constants: Array = []
+    for constant_name in ClassDB.class_get_integer_constant_list(target_class, true):
+        constants.append({
+            "name": String(constant_name),
+            "value": int(ClassDB.class_get_integer_constant(target_class, constant_name)),
+        })
+    var result = {
+        "class": target_class,
+        "parent_chain": parent_chain,
+        "methods": methods,
+        "properties": property_entries,
+        "signals": signal_entries,
+        "enums": enum_entries,
+        "constants": constants,
+    }
+    print(JSON.stringify(result))

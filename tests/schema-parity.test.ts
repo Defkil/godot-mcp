@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 describe('MCP schema and dispatch parity', () => {
-  it('advertises all 157 unique legacy contracts and the migrated tool exactly once', async () => {
+  it('advertises all 157 legacy contracts plus the migrated/registered tools exactly once', async () => {
     const server = new GodotServer({ registerSignalHandlers: false });
     const response = await requestHandler(server, 'tools/list')(
       { method: 'tools/list', params: {} },
@@ -27,14 +27,18 @@ describe('MCP schema and dispatch parity', () => {
     );
     const names = response.tools.map((tool: { name: string }) => tool.name);
 
-    expect(names).toHaveLength(157);
-    expect(new Set(names).size).toBe(157);
+    // 157 legacy contracts + the migrated/registered tools: modify_project_settings,
+    // list_project_files, launch_editor, read_scene, modify_scene_node,
+    // remove_scene_node, classdb_inspect.
+    expect(names).toHaveLength(158);
+    expect(new Set(names).size).toBe(158);
     expect(names.filter((name: string) => name === 'list_project_files')).toHaveLength(1);
     expect(names.filter((name: string) => name === 'modify_project_settings')).toHaveLength(1);
     expect(names.filter((name: string) => name === 'launch_editor')).toHaveLength(1);
     expect(names.filter((name: string) => name === 'read_scene')).toHaveLength(1);
     expect(names.filter((name: string) => name === 'modify_scene_node')).toHaveLength(1);
     expect(names.filter((name: string) => name === 'remove_scene_node')).toHaveLength(1);
+    expect(names.filter((name: string) => name === 'classdb_inspect')).toHaveLength(1);
     expect((server as any).toolRegistry.definitions().map((tool: { name: string }) => tool.name))
       .toEqual([
         'modify_project_settings',
@@ -43,12 +47,14 @@ describe('MCP schema and dispatch parity', () => {
         'read_scene',
         'modify_scene_node',
         'remove_scene_node',
+        'classdb_inspect',
       ]);
     expect((server as any).toolRegistry.capabilityFor('modify_project_settings')).toBe('edit');
     expect((server as any).toolRegistry.capabilityFor('modify_scene_node')).toBe('edit');
     expect((server as any).toolRegistry.capabilityFor('remove_scene_node')).toBe('edit');
     expect((server as any).toolRegistry.capabilityFor('read_scene')).toBe('inspect');
     expect((server as any).toolRegistry.capabilityFor('launch_editor')).toBe('runtime');
+    expect((server as any).toolRegistry.capabilityFor('classdb_inspect')).toBe('inspect');
   });
 
   it('executes the migrated project-settings mutation through the real MCP call boundary', async () => {
