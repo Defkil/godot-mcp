@@ -345,7 +345,7 @@ The original godot-mcp provided 20 tools for basic project management and scene 
 | `manage_input_map` | Add, remove, or list input actions |
 | `manage_export_presets` | Create or modify export presets |
 
-### Advanced Runtime (24 tools)
+### Advanced Runtime (25 tools)
 | Tool | Description |
 |------|-------------|
 | `game_get_camera` | Get active camera position/rotation/zoom |
@@ -371,11 +371,14 @@ The original godot-mcp provided 20 tools for basic project management and scene 
 | `game_ui_theme` | Apply theme overrides to a Control node |
 | `game_viewport` | Create or configure a SubViewport node |
 | `game_debug_draw` | Draw debug lines, spheres, or boxes in 3D |
+| `game_video` | Video playback control: play, pause, stop, seek on VideoStreamPlayer |
 
-### Build & Export (1 tool)
+### Build & Deployment (3 tools)
 | Tool | Description |
 |------|-------------|
 | `export_project` | Export a Godot project using a preset |
+| `manage_docker_export` | Create or read a Dockerfile for headless Godot export |
+| `manage_ci_pipeline` | Create or read a GitHub Actions workflow for automated Godot exports |
 
 ### Networking (4 tools)
 | Tool | Description |
@@ -411,6 +414,7 @@ The original godot-mcp provided 20 tools for basic project management and scene 
 | `game_camera_attributes` | Configure DOF, exposure, auto-exposure on camera |
 | `game_navigation_3d` | Create/configure NavigationRegion3D and bake |
 | `game_physics_3d` | Area3D queries and point/shape intersection tests |
+| `game_terrain` | Create/modify terrain meshes from heightmap data |
 
 ### 2D Systems (7 tools)
 | Tool | Description |
@@ -567,11 +571,16 @@ The server uses two communication channels:
 
 | Path | Description |
 |------|-------------|
-| `src/index.ts` | MCP server, tool definitions, and all handlers |
-| `src/utils.ts` | Pure utility functions (parameter mapping, validation, error helpers) |
+| `src/bin.ts` | CLI entry point (owns exit status) |
+| `src/index.ts` | Side-effect-free public library entry point and legacy execution shim |
+| `src/server.ts` | Godot MCP server implementation, tool handlers, runtime bridge wiring |
+| `src/server/tool-registry.ts` | Typed registry source for schemas, capabilities, handlers and stability metadata |
+| `src/security/` | Canonical path policy, capability policy, class-name defenses and tool-path guard |
+| `src/godot/` | Executable detection, process lifecycle, headless operation runner, bridge installer, UID resave, typed `BridgeClient` |
+| `src/tools/project/` | Bounded project-file listing scanner |
 | `src/scripts/godot_operations.gd` | Headless GDScript operations runner |
 | `src/scripts/mcp_interaction_server.gd` | TCP interaction server autoload |
-| `src/godot/bridge/client.ts` | NDJSON loopback transport for the runtime interaction bridge |
+| `src/utils.ts` | Pure utility functions (parameter mapping, validation, error helpers) |
 | `tests/` | Vitest test suite |
 
 ## Testing

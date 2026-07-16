@@ -3,67 +3,76 @@
 - Timestamp: 2026-07-16
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/senior-takeover`
-- Commit subject: `refactor: extract runtime bridge transport into BridgeClient`
+- Commit subject: `refactor: wire BridgeClient into GodotServer transport`
 - Remote: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
 - Worktree: clean after commit.
 
 ## Package completed
 
-The runtime bridge transport layer was extracted from `src/server.ts` into a
-new `src/godot/bridge/client.ts` module. `BridgeClient` owns the loopback TCP
-socket, the bounded 1 MiB NDJSON frame buffer, the versioned `__authenticate`
-handshake, request/response correlation by monotonic id, configurable
-connect-retry policy, idempotent destroy, and typed
-`BridgeAuthenticationError` / `BridgeConnectionError` / `BridgeFrameError`
-envelopes.
+`BridgeClient` (extracted in the previous package, commit `71e8a8c`) is now the
+authoritative runtime bridge transport for `GodotServer`. The inline socket,
+frame-buffer, request-correlation and versioned handshake logic has been
+removed from `src/server.ts`. `connectToGame` constructs a per-session
+`BridgeClient` with the per-process ephemeral port and token and delegates the
+handshake; `sendGameCommand` delegates correlated request/response; and
+`disconnectFromGame` performs idempotent teardown and nulls the cached client
+reference.
 
-Wiring `BridgeClient` into `GodotServer.connectToGame` /
-`sendGameCommand` / `disconnectFromGame` was deliberately deferred to a
-follow-up package so this commit stays a self-contained, reviewable
-transport extraction. Both paths are behaviorally equivalent for the
-supported handshake and command flows, and the existing
-`tests/runtime-authentication.test.ts` continues to exercise the inline
-path against a real scripted TCP server.
-
-The architecture doc, issue inventory (#84), and README were updated to
-record the new module.
+The server configures `retryOnAuthenticationFailure: false` so a wrong token
+fails on the first attempt instead of waiting through the historical 5 s retry
+window against a bridge that already proved it would not accept the
+credentials. `BridgeConnectionError` (and its `BridgeAuthenticationError` /
+`BridgeFrameError` subclasses) propagate from `sendGameCommand` while
+command-level errors from the bridge continue to surface in `response.error`.
 
 ## Verification
 
-- `npm test`: 21 files, 541 tests passed.
+- `npm test`: 22 files, 546 tests passed (was 541; +5 new tests).
 - `npm run build`: passed; TypeScript compiled and Godot scripts copied to `build/scripts`.
 - `npm audit --audit-level=high`: 0 vulnerabilities.
 - `git diff --check`: clean for the published range.
-- Godot 4.7.0 headless `--editor --quit`: clean exit (project import OK).
-- `tests/bridge-client.test.ts`: 10 contract tests pass in ~125 ms against a
-  scripted real TCP server (handshake success, token refusal, protocol
-  mismatch, fragmented NDJSON chunks, oversized frames, request timeouts,
-  server-driven broadcast frames, socket close, idempotent destroy, retry
-  exhaustion).
+- `tests/server-bridge-wiring.test.ts`: 4 contract tests cover the wired path
+  against a scripted real TCP server (handshake success, typed authentication
+  rejection, command correlation, idempotent disconnect).
+- `tests/bridge-client.test.ts`: 11 contract tests pass, including the new
+  focused pin for `retryOnAuthenticationFailure: false`.
+- `tests/runtime-authentication.test.ts`: existing legacy-surface coverage
+  continues to exercise the wired path against a real scripted TCP server.
 
 ## Independent evidence
 
-- AGY guarded read-only selection: recommended the bridge-client extraction
-  as the next package (slice 3). No file mutations; HEAD/status unchanged.
-- NeuralWatt guarded review of committed `71e8a8c`: `VERDICT | ACCEPT`. Notes
-  that `BridgeClient` is not yet wired into `GodotServer` and the architecture
-  doc over-states "extraction complete"; addressed in this handoff and the
-  follow-up doc clarification. No blocking findings.
+- AGY guarded read-only selection: recommended the BridgeClient wiring as the
+  next bounded package (slice 3 follow-up). No file mutations; HEAD/status
+  unchanged before implementation.
+- NeuralWatt guarded review of committed `bfa1817`: `VERDICT | ACCEPT`.
+  Non-blocking observations addressed in the follow-up docs commit: README
+  source-layout table updated to list `src/server.ts` as the implementation
+  entry point, README "All 157 Tools" tables now cover
+  `manage_docker_export` / `manage_ci_pipeline` / `game_terrain` / `game_video`,
+  and this handoff was rewritten to describe the wiring completion.
 
 ## Next safe action
 
-Wire `BridgeClient` into `GodotServer.connectToGame` / `sendGameCommand` /
-`disconnectFromGame` so the inline socket logic is replaced by the new
-module. Preserve the existing `runtime-authentication.test.ts` parity and
-add an additional integration check that exercises the wired path end-to-end.
-Then return to the remaining issue-inventory rows (capability policy, real
-Godot E2E, release automation, C# attach, ClassDB, GUT).
+Return to the remaining open issue-inventory rows after the bridge wiring is
+accepted:
+
+- Capability policy enforcement with profiles, rate/size limits and explicit
+  unsafe-tool opt-in (#97).
+- Real Godot runtime reconnect verification for the wired `BridgeClient`
+  (#84 follow-up).
+- Generic headless Godot test runner with GUT adapter (#29).
+- C# attachment in .NET projects (#114).
+- Bounded read-only ClassDB inspection (#98).
+- Texture import diagnostics (#103).
+- Editor-launch truth (#23, #106).
+- Release automation (#61).
 
 ## Known limits
 
-The complete release candidate is not ready: real Wargrid integration
-acceptance has not been run, and multiple issue-inventory rows remain
-open/partial (capability-policy enforcement, resource round-trip,
-tween/physics runtime behavior, C# attachment, ClassDB inspection, texture
-import diagnostics, editor-launch truth, GUT integration, and release
-automation). No candidate notification was sent.
+The complete release candidate is not yet ready: real Wargrid integration
+acceptance has not been run, and the open inventory rows above remain. The
+GDScript token compare is non-constant-time; the bridge binds only to
+`127.0.0.1` with a 120 s `_busy` safety reset, so this is negligible. The
+package identity remains `@tugcantopaloglu/godot-mcp@3.1.0` by deliberate
+release decision (per `docs/maintainers/takeover-baseline.md`). No candidate
+notification was sent.
