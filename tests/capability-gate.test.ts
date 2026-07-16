@@ -5,6 +5,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { GodotServer } from '../src/server.js';
 import { PathPolicy } from '../src/security/path-policy.js';
 import { CapabilityPolicy, CapabilityDeniedError } from '../src/security/capability-policy.js';
+import {
+  LEGACY_TOOL_CAPABILITIES,
+  capabilityForLegacyTool,
+} from '../src/security/legacy-capabilities.js';
 
 function requestHandler(server: GodotServer, method: 'tools/list' | 'tools/call') {
   const handlers = (server as unknown as { server: { _requestHandlers: Map<string, Function> } })
@@ -368,6 +372,157 @@ describe('CapabilityPolicy: legacy tool classification matches actual side effec
         // The four edit-class tools must reach the handler.
         expect(text).not.toMatch(/Capability denied/i);
       }
+    }
+  });
+});
+
+describe('CapabilityPolicy: network-capability classification for outbound transport tools', () => {
+  // game_http_request, game_websocket, game_multiplayer, and game_rpc all
+  // perform outbound transport (HTTP request, WebSocket client, ENet
+  // server/client, RPC). src/server.ts advertises and dispatches them
+  // alongside each other under "Batch 1: Networking + Input + System +
+  // Signals + Script", and src/scripts/mcp_interaction_server.gd performs
+  // the matching networking operations against a live Godot. The
+  // `runtime` capability is supposed to mean "launch, stop, bounded
+  // input/playtest control"; a profile that grants only `runtime` MUST
+  // therefore refuse to perform outbound networking on the user's
+  // machine, because that crosses the capability boundary the rest of
+  // the gate relies on. The capability the gate already defines for
+  // this class is `network`, granted by `legacy-full` and `unsafe-full`
+  // but NOT by `runtime-control`.
+
+  const networkTools = [
+    'game_http_request',
+    'game_websocket',
+    'game_multiplayer',
+    'game_rpc',
+  ] as const;
+
+  // Minimal/invalid arguments: a real (allowed) project root so the
+  // path policy admits the call, but each handler is invoked in a way
+  // that makes it fail locally/downstream — gameCommand with no live
+  // Godot process attached — instead of performing any real network
+  // I/O. We then assert absence of "Capability denied" for legacy-full
+  // (the gate must stay silent) and the structured envelope for
+  // runtime-control / safe-mutations (the gate must trip first).
+  const networkArgs: Readonly<Record<(typeof networkTools)[number], (root: string) => Record<string, unknown>>> = {
+    game_http_request: (root) => ({ projectPath: root, method: 'GET', url: 'http://127.0.0.1:1' }),
+    game_websocket: (root) => ({ projectPath: root, action: 'connect', url: 'ws://127.0.0.1:1' }),
+    game_multiplayer: (root) => ({ projectPath: root, action: 'create_server', port: 1, max_clients: 1 }),
+    game_rpc: (root) => ({ projectPath: root, action: 'config', nodePath: '/root', method: 'no_such' }),
+  };
+
+  it('the legacy capability map classifies every network tool as `network`', () => {
+    for (const toolName of networkTools) {
+      const cap = capabilityForLegacyTool(toolName);
+      expect(cap, `expected ${toolName} to be classified in the legacy map`).toBeDefined();
+      expect(
+        cap,
+        `expected ${toolName} to be classified 'network' (was '${cap}') so runtime-control denies it`,
+      ).toBe('network');
+      expect(LEGACY_TOOL_CAPABILITIES[toolName]).toBe('network');
+    }
+  });
+
+  for (const toolName of networkTools) {
+    it(`denies ${toolName} to runtime-control with a structured network CapabilityDeniedError`, async () => {
+      const { root } = makeProject();
+      const server = new GodotServer({
+        registerSignalHandlers: false,
+        godotPath: '/usr/bin/godot',
+        runtimeConnector: () => new Promise(() => undefined),
+        runtimeConnectInitialDelayMs: 5,
+        pathPolicy: new PathPolicy([root]),
+        capabilityPolicy: new CapabilityPolicy('runtime-control'),
+      });
+
+      const response = await requestHandler(server, 'tools/call')(
+        {
+          method: 'tools/call',
+          params: {
+            name: toolName,
+            arguments: networkArgs[toolName](root),
+          },
+        },
+        {},
+      );
+
+      expect(response.isError).toBe(true);
+      const text = response.content[0].text as string;
+      // The wire-level envelope must carry the structured capability
+      // denial naming the `network` capability. The gate is the
+      // authoritative signal; an admitted-but-failing handler must
+      // not produce a different category of error first.
+      expect(text).toContain('Capability denied');
+      expect(text).toContain(toolName);
+      expect(text).toContain('network');
+      expect(text).toContain('runtime-control');
+      expect(text).toMatch(/remediation/i);
+    });
+  }
+
+  for (const toolName of networkTools) {
+    it(`admits ${toolName} past the capability gate under legacy-full (no "Capability denied" envelope)`, async () => {
+      const { root } = makeProject();
+      const server = new GodotServer({
+        registerSignalHandlers: false,
+        godotPath: '/usr/bin/godot',
+        runtimeConnector: () => new Promise(() => undefined),
+        runtimeConnectInitialDelayMs: 5,
+        pathPolicy: new PathPolicy([root]),
+        capabilityPolicy: new CapabilityPolicy('legacy-full'),
+      });
+
+      const response = await requestHandler(server, 'tools/call')(
+        {
+          method: 'tools/call',
+          params: {
+            name: toolName,
+            arguments: networkArgs[toolName](root),
+          },
+        },
+        {},
+      );
+
+      const text = JSON.stringify(response);
+      // The capability gate is silent for granted capabilities.
+      // Downstream errors (no live Godot process, etc.) are not what
+      // we are testing here — only that legacy-full is allowed to
+      // call the handler.
+      expect(text).not.toMatch(/Capability denied/i);
+    });
+  }
+
+  it('still denies network tools to safe-mutations (read+edit, no runtime, no network)', async () => {
+    // Sanity: a strict profile must keep refusing network egress.
+    const { root } = makeProject();
+    for (const toolName of networkTools) {
+      const server = new GodotServer({
+        registerSignalHandlers: false,
+        godotPath: '/usr/bin/godot',
+        runtimeConnector: () => new Promise(() => undefined),
+        runtimeConnectInitialDelayMs: 5,
+        pathPolicy: new PathPolicy([root]),
+        capabilityPolicy: new CapabilityPolicy('safe-mutations'),
+      });
+
+      const response = await requestHandler(server, 'tools/call')(
+        {
+          method: 'tools/call',
+          params: {
+            name: toolName,
+            arguments: networkArgs[toolName](root),
+          },
+        },
+        {},
+      );
+
+      expect(response.isError).toBe(true);
+      const text = response.content[0].text as string;
+      expect(text).toContain('Capability denied');
+      expect(text).toContain(toolName);
+      expect(text).toContain('network');
+      expect(text).toContain('safe-mutations');
     }
   });
 });

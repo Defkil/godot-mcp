@@ -11,7 +11,10 @@ import type { ToolCapability } from '../server/tool-registry.js';
  * Classification rule:
  * - `inspect`: read-only project/editor/runtime introspection.
  * - `edit`: project file/resource/scene/script mutations.
- * - `runtime`: launch, stop, bounded input/playtest control.
+ * - `runtime`: launch, stop, bounded input/playtest control. Outbound
+ *   transport (HTTP request, WebSocket client, ENet server/client, RPC)
+ *   is NOT `runtime`; it is `network`, because a profile that grants
+ *   playtest control must not implicitly grant egress.
  * - `export`: build and artifact generation (export presets, CI, Docker).
  * - `network`: any non-loopback or download operation.
  * - `unsafe`: arbitrary GDScript evaluation, arbitrary script attachment,
@@ -170,13 +173,18 @@ export const LEGACY_TOOL_CAPABILITIES: Readonly<Record<string, ToolCapability>> 
   game_environment: 'runtime',
   game_manage_group: 'runtime',
   game_set_shader_param: 'runtime',
-  game_http_request: 'runtime',
-  game_websocket: 'runtime',
-  game_multiplayer: 'runtime',
-  game_rpc: 'runtime',
   game_touch: 'runtime',
   game_resource: 'runtime',
   game_gamepad: 'runtime',
+
+  // network — outbound transport: HTTP request, WebSocket client, ENet
+  // server/client, and RPC all open sockets to non-loopback peers and are
+  // classified `network` (not `runtime`) so that profiles which only grant
+  // runtime playtest control cannot silently egress the user machine.
+  game_http_request: 'network',
+  game_websocket: 'network',
+  game_multiplayer: 'network',
+  game_rpc: 'network',
 
   // export
   export_project: 'export',
