@@ -108,11 +108,13 @@ describe('Tool definitions', () => {
   });
 
   it('legacy switch handles every tool not yet migrated to the registry', () => {
-    const migratedTools = new Set(['list_project_files']);
+    const migratedTools = new Set(['modify_project_settings', 'list_project_files']);
     for (const name of ALL_TOOL_NAMES) {
       if (!migratedTools.has(name)) expect(sourceCode).toContain(`case '${name}':`);
     }
-    expect(sourceCode).not.toContain("case 'list_project_files':");
+    for (const name of migratedTools) {
+      expect(sourceCode).not.toContain(`case '${name}':`);
+    }
   });
 
   it('no tool description exceeds 80 characters', () => {

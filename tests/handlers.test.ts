@@ -1932,7 +1932,7 @@ describe('Tool dispatch routing', () => {
   it('routes every remaining legacy case to a handler', () => {
     const caseRegex = /case '(\w+)':\s*\n\s*return await this\.handle/g;
     const matches = [...sourceCode.matchAll(caseRegex)];
-    expect(matches.length).toBe(156);
+    expect(matches.length).toBe(155);
   });
 
   it('does not let a legacy case fall through', () => {

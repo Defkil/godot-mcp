@@ -899,6 +899,35 @@ export class GodotServer {
    */
   private setupToolHandlers() {
     this.toolRegistry.register({
+      name: 'modify_project_settings',
+      description: 'Modify a project.godot setting',
+      capability: 'edit',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Godot project path',
+          },
+          section: {
+            type: 'string',
+            description: 'Section in project.godot (e.g., "application", "display", "rendering")',
+          },
+          key: {
+            type: 'string',
+            description: 'Setting key (e.g., "run/main_scene", "window/size/viewport_width")',
+          },
+          value: {
+            type: 'string',
+            description: 'Value to set (as a string, will be written as-is)',
+          },
+        },
+        required: ['projectPath', 'section', 'key', 'value'],
+      },
+      handler: args => this.handleModifyProjectSettings(args),
+    });
+
+    this.toolRegistry.register({
       name: 'list_project_files',
       description: 'List project files, optionally filtered by extension',
       capability: 'inspect',
@@ -1539,32 +1568,6 @@ export class GodotServer {
               },
             },
             required: ['projectPath'],
-          },
-        },
-        {
-          name: 'modify_project_settings',
-          description: 'Modify a project.godot setting',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Godot project path',
-              },
-              section: {
-                type: 'string',
-                description: 'Section in project.godot (e.g., "application", "display", "rendering")',
-              },
-              key: {
-                type: 'string',
-                description: 'Setting key (e.g., "run/main_scene", "window/size/viewport_width")',
-              },
-              value: {
-                type: 'string',
-                description: 'Value to set (as a string, will be written as-is)',
-              },
-            },
-            required: ['projectPath', 'section', 'key', 'value'],
           },
         },
         ...this.toolRegistry.definitions(),
@@ -3477,8 +3480,6 @@ export class GodotServer {
         // Project management tools
         case 'read_project_settings':
           return await this.handleReadProjectSettings(request.params.arguments);
-        case 'modify_project_settings':
-          return await this.handleModifyProjectSettings(request.params.arguments);
         // New runtime signal/animation/group tools
         case 'game_connect_signal':
           return await this.handleGameConnectSignal(request.params.arguments);
