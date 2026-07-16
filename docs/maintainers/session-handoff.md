@@ -98,7 +98,34 @@ The full inventory is in `docs/maintainers/issue-inventory.md`. Highest-priority
 
 ## Next safe action
 
-Obtain a bounded independent review of the unreviewed range
-`5565d6e..973b627` (capability-policy + classdb_inspect), then pick the
-highest-priority remaining row using AGY for bounded package selection.
-Advance one coherent, reviewable package per tick.
+**NeuralWatt review of `5565d6e..48b921f` returned VERDICT | REJECT.**
+The full transcript is saved at
+`C:/Users/mail/AppData/Local/agent-runtime/state/godot-mcp-reviews/48b921f-REJECT.txt`.
+The blocking finding is a security regression in
+`src/security/legacy-capabilities.ts`: six state-mutating tools
+(`manage_plugins`, `manage_translations`, `manage_scene_signals`,
+`manage_layers`, `manage_scene_structure`, `manage_input_map`) are
+classified `inspect` despite writing to `project.godot` or scene files,
+breaking the read-only contract of the `inspect-only` profile.
+`manage_plugins` enables arbitrary plugin code on the next editor load —
+the same risk class as `[Coding-Solo#95]`.
+
+The reviewer's HEAD and worktree fingerprint verification shows
+HEAD_UNCHANGED=yes, STATUS_UNCHANGED=yes, so the review did not mutate
+the repository.
+
+A focused repair prompt has been queued at
+`C:/Users/mail/AppData/Local/agent-runtime/state/godot-mcp-reviews/48b921f-REPAIR.md`
+and dispatched to AGY (`godot-mcp-repair-48b921f.md`). The repair must:
+
+1. Reclassify `manage_plugins` and `manage_translations` to `unsafe`.
+2. Reclassify `manage_scene_signals`, `manage_layers`, `manage_scene_structure`,
+   `manage_input_map` to `edit`.
+3. Add wire-level tests proving `inspect-only` denies all six.
+4. Update stale `157` references in `issue-inventory.md:32` and
+   `takeover-architecture.md:21` to `158`.
+5. Pass all canonical gates; commit on top of `48b921f` as one focused
+   `fix:` commit; re-trigger NeuralWatt review of the corrected range.
+
+Do not advance to any other package until the REJECT is repaired and
+re-reviewed.
