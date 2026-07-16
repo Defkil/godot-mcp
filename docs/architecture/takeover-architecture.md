@@ -220,12 +220,13 @@ envelopes. Pure contract tests in `tests/bridge-client.test.ts` exercise the
 scripted-server equivalent of every failure mode without standing up the full
 `GodotServer` or a real Godot instance.
 
-Wiring `BridgeClient` into `GodotServer.connectToGame` / `sendGameCommand` /
-`disconnectFromGame` is intentionally deferred to a follow-up package. Until
-that integration lands, the inline socket logic in `src/server.ts` remains the
-authoritative transport and `BridgeClient` is the unit-tested reference
-implementation that the server-side migration will adopt. Both paths are
-behaviorally equivalent for the supported handshake and command flows.
+`BridgeClient` is now wired into `GodotServer` as the authoritative transport:
+`connectToGame` delegates the handshake, `sendGameCommand` delegates correlated
+request/response, and `disconnectFromGame` performs idempotent teardown. The
+server configures `retryOnAuthenticationFailure: false` so a wrong token fails
+on the first attempt instead of retrying a bridge that already proved it would
+not accept the credentials. `tests/server-bridge-wiring.test.ts` covers the
+wired path end-to-end against a scripted real TCP server.
 
 ### Slice 4 — schema and mutation truth
 

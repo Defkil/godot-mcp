@@ -12,7 +12,6 @@ import { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync, mkdir
 import { spawn, execFile, type ChildProcessWithoutNullStreams } from 'child_process';
 import { promisify } from 'util';
 import { env as processEnvironment } from 'node:process';
-import { createConnection, Socket } from 'net';
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -50,6 +49,7 @@ import {
   terminateProcessTree,
 } from './godot/process-lifecycle.js';
 import { installRuntimeBridge, type BridgeInstallation } from './godot/bridge-installer.js';
+import { BridgeClient, BridgeConnectionError } from './godot/bridge/client.js';
 import { createUidResaveParams, parseUidResaveSummary } from './godot/uid-resave.js';
 import { allocateRuntimeCredentials, runtimeEnvironment } from './godot/runtime-credentials.js';
 import { listProjectFiles } from './tools/project/list-project-files.js';
@@ -116,12 +116,16 @@ export interface GodotServerConfig {
 
 /**
  * Interface for a TCP connection to the running game
+ *
+ * The transport (TCP socket, NDJSON framing, request correlation, handshake)
+ * is owned by `BridgeClient`. The server only retains session-level state:
+ * the per-process credentials, the active `BridgeClient` instance, and the
+ * cached connected boolean exposed for compatibility with the existing
+ * `gameCommand` guard.
  */
 interface GameConnection {
-  socket: Socket | null;
+  bridgeClient: BridgeClient | null;
   connected: boolean;
-  responseBuffer: string;
-  pendingRequests: Map<number, (value: any) => void>;
   projectPath: string | null;
   installation: BridgeInstallation | null;
   port: number | null;
@@ -147,16 +151,13 @@ export class GodotServer {
   private readonly runtimeConnector?: (projectPath: string) => Promise<void>;
   private readonly runtimeConnectInitialDelayMs: number;
   private gameConnection: GameConnection = {
-    socket: null,
+    bridgeClient: null,
     connected: false,
-    responseBuffer: '',
-    pendingRequests: new Map(),
     projectPath: null,
     installation: null,
     port: null,
     token: null,
   };
-  private nextRequestId: number = 1;
   private lastErrorIndex: number = 0;
   private lastLogIndex: number = 0;
   private readonly AUTOLOAD_NAME = 'McpInteractionServer';
@@ -438,7 +439,11 @@ export class GodotServer {
   }
 
   /**
-   * Connect to the game's TCP interaction server with retries
+   * Connect to the game's TCP interaction server with retries.
+   *
+   * The transport, framing, request correlation, versioned handshake and
+   * bounded 1 MiB frame buffer are owned by `BridgeClient`. This method
+   * only owns the credential flow and the high-level retry loop.
    */
   private async connectToGame(projectPath: string): Promise<void> {
     this.gameConnection.projectPath = projectPath;
@@ -448,158 +453,68 @@ export class GodotServer {
       throw new Error('Runtime credentials were not initialized before connection.');
     }
 
-    // Initial delay to let the game start up
-    await new Promise(resolve => setTimeout(resolve, this.runtimeConnectInitialDelayMs));
+    const client = new BridgeClient({
+      host: '127.0.0.1',
+      port,
+      token,
+      connectInitialDelayMs: this.runtimeConnectInitialDelayMs,
+      connectMaxAttempts: 10,
+      connectRetryDelayMs: 500,
+      commandTimeoutMs: 10_000,
+      connectTimeoutMs: 5_000,
+      expectedProtocolVersion: 1,
+      // Authentication failures are not transient; refuse the bad token on
+      // the first attempt instead of waiting through a 5s retry window.
+      retryOnAuthenticationFailure: false,
+      onDebug: message => this.logDebug(message),
+    });
+    this.gameConnection.bridgeClient = client;
 
-    const maxAttempts = 10;
-    const retryDelay = 500;
-
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      if (!this.activeProcess) {
-        const message = 'Game process exited before the interaction bridge became ready';
-        this.logDebug(message);
-        throw new Error(message);
-      }
-
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const socket = createConnection({ host: '127.0.0.1', port }, () => {
-            this.gameConnection.socket = socket;
-            this.gameConnection.connected = true;
-            this.gameConnection.responseBuffer = '';
-            this.gameConnection.pendingRequests.clear();
-            this.logDebug(`Connected to game interaction server (attempt ${attempt})`);
-            console.error(`[SERVER] Connected to game interaction server on port ${port}`);
-
-            socket.on('data', (data: Buffer) => {
-              this.gameConnection.responseBuffer += data.toString();
-              if (Buffer.byteLength(this.gameConnection.responseBuffer, 'utf8') > 1024 * 1024) {
-                this.logDebug('Game interaction response exceeded the 1 MiB buffer limit');
-                this.rejectAllPending({ error: 'Runtime response exceeded the 1 MiB buffer limit' });
-                socket.destroy();
-                return;
-              }
-              // Process complete lines
-              while (this.gameConnection.responseBuffer.includes('\n')) {
-                const newlinePos = this.gameConnection.responseBuffer.indexOf('\n');
-                const line = this.gameConnection.responseBuffer.substring(0, newlinePos).trim();
-                this.gameConnection.responseBuffer = this.gameConnection.responseBuffer.substring(newlinePos + 1);
-                if (line.length > 0) {
-                  try {
-                    const parsed = JSON.parse(line);
-                    this.resolveGameResponse(parsed);
-                  } catch (e) {
-                    this.logDebug(`Failed to parse game response: ${line}`);
-                  }
-                }
-              }
-            });
-
-            socket.on('close', () => {
-              this.logDebug('Game interaction connection closed');
-              this.gameConnection.connected = false;
-              this.gameConnection.socket = null;
-              this.rejectAllPending({ error: 'Connection closed' });
-            });
-
-            socket.on('error', (err: Error) => {
-              this.logDebug(`Game interaction socket error: ${err.message}`);
-            });
-
-            resolve();
-          });
-
-          socket.on('error', (err: Error) => {
-            reject(err);
-          });
-        });
-
-        const authentication = await this.sendGameCommand(
-          '__authenticate',
-          { token },
-          2000,
-        );
-        if (
-          authentication?.error ||
-          authentication?.result?.authenticated !== true ||
-          authentication?.result?.protocolVersion !== 1
-        ) {
-          this.disconnectFromGame();
-          throw new Error(authentication?.error || 'Runtime authentication failed.');
-        }
-        this.logDebug(`Authenticated game interaction session on port ${port}`);
-        return;
-      } catch (err) {
-        this.logDebug(`Connection attempt ${attempt}/${maxAttempts} failed, retrying in ${retryDelay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, retryDelay));
-      }
+    try {
+      await client.connect();
+    } catch (err) {
+      this.gameConnection.bridgeClient = null;
+      this.logDebug(
+        `BridgeClient.connect failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      throw err;
     }
 
-    const message = `Failed to connect to game interaction server after ${maxAttempts} attempts`;
-    console.error(`[SERVER] ${message}`);
-    throw new Error(message);
+    this.gameConnection.connected = client.isConnected();
+    console.error(`[SERVER] Connected to game interaction server on port ${port}`);
   }
 
   /**
-   * Disconnect from the game interaction server
+   * Disconnect from the game interaction server. Idempotent.
    */
   private disconnectFromGame(): void {
-    if (this.gameConnection.socket) {
-      this.gameConnection.socket.destroy();
-      this.gameConnection.socket = null;
-    }
+    const client = this.gameConnection.bridgeClient;
+    this.gameConnection.bridgeClient = null;
     this.gameConnection.connected = false;
-    this.gameConnection.responseBuffer = '';
-    this.rejectAllPending({ error: 'Disconnected' });
-  }
-
-  private rejectAllPending(response: any): void {
-    for (const resolver of this.gameConnection.pendingRequests.values()) {
-      resolver(response);
+    if (client) {
+      client.disconnect();
     }
-    this.gameConnection.pendingRequests.clear();
-  }
-
-  private resolveGameResponse(parsed: any): void {
-    const pending = this.gameConnection.pendingRequests;
-    if (pending.size === 0) return;
-    let id: number | undefined;
-    if (parsed && typeof parsed.id === 'number') {
-      if (!pending.has(parsed.id)) return;
-      id = parsed.id;
-    } else {
-      id = pending.keys().next().value;
-    }
-    if (id === undefined) return;
-    const resolver = pending.get(id)!;
-    pending.delete(id);
-    resolver(parsed);
   }
 
   /**
-   * Send a command to the running game and wait for a response
+   * Send a command to the running game and wait for a response.
+   *
+   * Delegates to the wired `BridgeClient`; transport errors propagate as
+   * `BridgeConnectionError` (and its authentication/frame subclasses) while
+   * command-level errors from the bridge are returned in `response.error`.
    */
-  private async sendGameCommand(command: string, params: Record<string, any> = {}, timeoutMs: number = 10000): Promise<any> {
-    if (!this.gameConnection.connected || !this.gameConnection.socket) {
-      throw new Error('Not connected to game interaction server. Is the game running?');
+  private async sendGameCommand(
+    command: string,
+    params: Record<string, any> = {},
+    timeoutMs: number = 10000,
+  ): Promise<any> {
+    const client = this.gameConnection.bridgeClient;
+    if (!client || !client.isConnected()) {
+      throw new BridgeConnectionError(
+        'Not connected to game interaction server. Is the game running?',
+      );
     }
-
-    const id = this.nextRequestId++;
-    const payload = JSON.stringify({ command, params, id }) + '\n';
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        this.gameConnection.pendingRequests.delete(id);
-        reject(new Error(`Game command '${command}' timed out after ${timeoutMs / 1000}s`));
-      }, timeoutMs);
-
-      this.gameConnection.pendingRequests.set(id, (response: any) => {
-        clearTimeout(timeout);
-        resolve(response);
-      });
-
-      this.gameConnection.socket!.write(payload);
-    });
+    return client.sendCommand(command, params, timeoutMs);
   }
 
   private captureProcessDiagnostics(

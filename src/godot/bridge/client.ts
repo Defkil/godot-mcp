@@ -11,6 +11,14 @@ export interface BridgeClientOptions {
   connectInitialDelayMs?: number;
   connectMaxAttempts?: number;
   connectRetryDelayMs?: number;
+  /**
+   * When `true` (default), authentication failures still go through the
+   * connection retry loop. When `false`, an authentication failure is
+   * propagated immediately on the first attempt; the server keeps its
+   * historical behavior of refusing a wrong token without retrying a bridge
+   * that already proved it would not accept the token.
+   */
+  retryOnAuthenticationFailure?: boolean;
   socketFactory?: (host: string, port: number) => Socket;
   onDebug?: (message: string) => void;
 }
@@ -60,6 +68,7 @@ const DEFAULT_CONNECT_INITIAL_DELAY_MS = 0;
 const DEFAULT_CONNECT_MAX_ATTEMPTS = 10;
 const DEFAULT_CONNECT_RETRY_DELAY_MS = 500;
 const DEFAULT_EXPECTED_PROTOCOL_VERSION = 1;
+const DEFAULT_RETRY_ON_AUTHENTICATION_FAILURE = true;
 const DEFAULT_HOST = '127.0.0.1';
 
 function defaultSocketFactory(host: string, port: number): Socket {
@@ -79,9 +88,13 @@ function defaultSocketFactory(host: string, port: number): Socket {
  */
 export class BridgeClient {
   private readonly options: Required<
-    Omit<BridgeClientOptions, 'socketFactory' | 'onDebug' | 'expectedProtocolVersion'>
+    Omit<
+      BridgeClientOptions,
+      'socketFactory' | 'onDebug' | 'expectedProtocolVersion' | 'retryOnAuthenticationFailure'
+    >
   > & {
     expectedProtocolVersion: number;
+    retryOnAuthenticationFailure: boolean;
     socketFactory: (host: string, port: number) => Socket;
     onDebug: ((message: string) => void) | undefined;
   };
@@ -107,6 +120,8 @@ export class BridgeClient {
         options.connectInitialDelayMs ?? DEFAULT_CONNECT_INITIAL_DELAY_MS,
       connectMaxAttempts: options.connectMaxAttempts ?? DEFAULT_CONNECT_MAX_ATTEMPTS,
       connectRetryDelayMs: options.connectRetryDelayMs ?? DEFAULT_CONNECT_RETRY_DELAY_MS,
+      retryOnAuthenticationFailure:
+        options.retryOnAuthenticationFailure ?? DEFAULT_RETRY_ON_AUTHENTICATION_FAILURE,
       socketFactory: options.socketFactory ?? defaultSocketFactory,
       onDebug: options.onDebug,
     };
@@ -146,6 +161,15 @@ export class BridgeClient {
         lastError = err instanceof Error ? err : new Error(String(err));
         this.debug(`Connection attempt ${attempt}/${maxAttempts} failed: ${lastError.message}`);
         this.teardownSocket();
+        // Authentication failures are not transient: a bridge that already
+        // refused the token will not accept it on a retry. Honor the
+        // configured policy (default: retry; server wiring: do not retry).
+        if (
+          lastError instanceof BridgeAuthenticationError &&
+          !this.options.retryOnAuthenticationFailure
+        ) {
+          throw lastError;
+        }
         if (attempt < maxAttempts) {
           await delay(retryDelay);
         }

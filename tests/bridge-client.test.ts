@@ -249,4 +249,24 @@ describe('BridgeClient', () => {
     await client.disconnect();
     expect(client.isConnected()).toBe(false);
   });
+
+  it('does not retry on BridgeAuthenticationError when retryOnAuthenticationFailure is false', async () => {
+    const bridge = createScriptedBridge();
+    bridges.push(bridge);
+    bridge.onRequest = req =>
+      JSON.stringify({ id: req.id, error: 'invalid token' });
+    const { port } = await bridge.start();
+
+    const client = clientFor({
+      port,
+      connectMaxAttempts: 5,
+      connectRetryDelayMs: 10,
+      retryOnAuthenticationFailure: false,
+    });
+    await expect(client.connect()).rejects.toBeInstanceOf(BridgeAuthenticationError);
+    // Only one __authenticate round trip should have occurred.
+    const authAttempts = bridge.received.filter(line => line.includes('__authenticate'));
+    expect(authAttempts).toHaveLength(1);
+    await client.disconnect();
+  });
 });

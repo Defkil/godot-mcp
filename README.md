@@ -584,7 +584,7 @@ Representative coverage includes:
 |------|------------|
 | Tool contracts and handlers | `tool-definitions`, `handlers`, `utils` |
 | Path and class security | `path-policy`, `tool-path-guard`, `godot-class-name` |
-| Runtime lifecycle and authentication | `server-lifecycle`, `process-lifecycle`, `runtime-authentication`, `runtime-credentials`, `bridge-installer` |
+| Runtime lifecycle and authentication | `server-lifecycle`, `process-lifecycle`, `runtime-authentication`, `runtime-credentials`, `bridge-installer`, `bridge-client`, `server-bridge-wiring` |
 | Godot operations | `validate-script`, `uid-resave`, `list-project-files`, `dotnet` |
 | Packaging and embedding | `version-sync`, `library-entrypoint` |
 
