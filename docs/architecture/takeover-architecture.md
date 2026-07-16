@@ -210,6 +210,16 @@ Closes the substance of original issues #23, #37, #70 and #106.
 
 Closes the substance of original issue #84 and immediate issues #9/#16.
 
+The transport layer was extracted from `src/server.ts` into
+`src/godot/bridge/client.ts`. `BridgeClient` owns the loopback TCP socket, the
+bounded NDJSON frame buffer (1 MiB cap), the versioned `__authenticate`
+handshake, request/response correlation by monotonic id, configurable
+connect-retry policy, idempotent destroy, and typed
+`BridgeAuthenticationError` / `BridgeConnectionError` / `BridgeFrameError`
+envelopes. Pure contract tests in `tests/bridge-client.test.ts` exercise the
+scripted-server equivalent of every failure mode without standing up the full
+`GodotServer` or a real Godot instance.
+
 ### Slice 4 — schema and mutation truth
 
 - registry-derived schema/dispatch parity;

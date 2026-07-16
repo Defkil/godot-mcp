@@ -571,6 +571,7 @@ The server uses two communication channels:
 | `src/utils.ts` | Pure utility functions (parameter mapping, validation, error helpers) |
 | `src/scripts/godot_operations.gd` | Headless GDScript operations runner |
 | `src/scripts/mcp_interaction_server.gd` | TCP interaction server autoload |
+| `src/godot/bridge/client.ts` | NDJSON loopback transport for the runtime interaction bridge |
 | `tests/` | Vitest test suite |
 
 ## Testing
