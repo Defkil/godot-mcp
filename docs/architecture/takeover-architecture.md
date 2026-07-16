@@ -220,6 +220,13 @@ envelopes. Pure contract tests in `tests/bridge-client.test.ts` exercise the
 scripted-server equivalent of every failure mode without standing up the full
 `GodotServer` or a real Godot instance.
 
+Wiring `BridgeClient` into `GodotServer.connectToGame` / `sendGameCommand` /
+`disconnectFromGame` is intentionally deferred to a follow-up package. Until
+that integration lands, the inline socket logic in `src/server.ts` remains the
+authoritative transport and `BridgeClient` is the unit-tested reference
+implementation that the server-side migration will adopt. Both paths are
+behaviorally equivalent for the supported handshake and command flows.
+
 ### Slice 4 — schema and mutation truth
 
 - registry-derived schema/dispatch parity;
