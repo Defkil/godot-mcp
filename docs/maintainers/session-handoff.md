@@ -4,7 +4,7 @@
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/senior-takeover`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: `fix: correct asset import prerequisite classification` (`76c9207`, accepted by independent NeuralWatt review after repairing the prior `88dda1e` REJECT).
+- Current local package: `fix: gate manage_shader against res:// injection` (the new sibling-gate package, fully described in the "Current package — manage_shader injection gate" section below; tests 8/8 green, full canonical gates green).
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `d00c4451cfd9a8443f12f70ee83814c476a73c63`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
@@ -1050,21 +1050,134 @@ state.
    (`tests/game-wait-frame-bridge.test.ts`).
 7. Real-Godot verification of the asset import prerequisite
    (`tests/asset-import-prerequisite.test.ts`).
-8. `manage_shader` minimal sibling hardening (`PathPolicy.assertProject`
-   replace lexical `validatePath`; optional `action` allowlist;
-   optional strict `res://` `shaderPath` gate matching the same
-   `translationPathRegex` shape) — separate, lower-priority bounded
-   package.
-9. Final read/test-only Wargrid integration acceptance after every
+8. Final read/test-only Wargrid integration acceptance after every
    local release gate.
+
+## Current package — manage_shader injection gate (sibling of tugcantopaloglu#9)
+
+The handoff previously listed `manage_shader` minimal hardening as the
+next bounded package. The package closes the same wire contract the
+sibling `set_main_scene` / `manage_translations` / `manage_layers` /
+`manage_plugins` / `manage_autoloads` gates already hold.
+
+`handleManageShader` historically joined `args.shaderPath` onto
+`args.projectPath`, gated only by the lexical `validatePath` boundary
+on both inputs, and `mkdirSync`ed the user-named parent directory
+before writing the shader source. A caller could smuggle a
+section-breaking newline (`shaderPath = "evil.gdshader\n..."`), a
+relative member lacking `res://` (`shaderPath = "shaders/spatial.gdshader"`),
+an inside-segment `..` traversal (`shaderPath = "sub/../etc/passwd"`),
+or any unknown `action` and still observe a successful write/read or
+silently corrupt neighbouring files.
+
+The gate is now:
+
+1. An explicit `action` allowlist (`read` | `create`) BEFORE any
+   filesystem call.
+2. A canonical `res://` + canonical-project-member regex
+   (`/^res:\/\/(?!\.\.)(?!.*\.\.)[A-Za-z0-9_\-\/]+\.[A-Za-z0-9]+$/`)
+   matching the sibling `scenePathRegex` / `translationPathRegex`
+   shape; the legacy auto-prepend shortcut is intentionally dropped
+   (callers MUST supply `res://shaders/foo.gdshader`), exactly as the
+   `set_main_scene` / `manage_translations` contract change.
+3. `this.pathPolicy.assertProject(args.projectPath)` replaces the
+   lexical `validatePath` boundary on `projectPath`.
+4. `this.pathPolicy.resolveProjectMember(projectRoot, args.shaderPath)`
+   resolves the shader to its canonical absolute path WITHIN the
+   project root, providing defence-in-depth on the `..` escape even if
+   the regex is bypassed by a future change.
+
+The wire-level regression in `tests/manage-shader-injection.test.ts`
+(8 tests) drives the real MCP `tools/call` handler for `manage_shader`
+against a temporary Godot project (cleaned in `afterEach`) and stubs
+nothing relevant to the gate: section-breaking newline rejected,
+double-quote break-out rejected, `shaderPath` lacking `res://`
+rejected, `..` escape rejected via the path policy, unknown `action`
+rejected without touching the filesystem, benign `read` of an existing
+`res://` shader returns the source, benign `create` writes a single
+`.gdshader` file under the named directory and does not touch
+`project.godot`, benign `read` of a missing `res://` shader returns
+the not-found envelope.
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every
+  handler, the 5 closed-list profiles, the package identity, the path
+  policy, the runtime bridge, and the MIT attribution;
+- the only documented contract change is the dropped auto-prepend
+  shortcut on `shaderPath` (caller must supply canonical
+  `res://...`) — matching the sibling
+  `manage_autoloads` / `manage_layers` / `manage_plugins` /
+  `set_main_scene` / `manage_translations` gates;
+- does not push, publish, create a PR/release, upload a package,
+  write `docs/maintainers/release-candidate.md`, or send the
+  candidate-ready notification.
+
+Source evidence:
+
+- `src/server.ts:6949-6997` (`handleManageShader`) is gated by the
+  action allowlist, the canonical `res://` regex,
+  `PathPolicy.assertProject`, and `PathPolicy.resolveProjectMember`.
+- `tests/manage-shader-injection.test.ts` is the only new test file
+  (8 tests).
+- `docs/maintainers/issue-inventory.md` row 17 is the only docs edit.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/manage-shader-injection.test.ts`:
+  1 file, 8 tests passed (RED 4/8 confirmed before the fix;
+  GREEN 8/8 after — the `..` escape and unknown action branches were
+  already partially shielded by `validatePath` and the runtime
+  switch fallback, but lacked the typed-envelope shape the sibling
+  gates use).
+- `npm test`: 38 files, 735 tests passed (was 727 before this
+  package; +8 new tests).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0).
+- `npm pack --dry-run`: tarball name `defkil-godot-mcp-4.0.0.tgz`,
+  identity intact (`@defkil/godot-mcp@4.0.0`).
+
+Any source, test, documentation, build/import, generated-artifact,
+amend, or cleanup edit after these commands invalidates the relevant
+evidence and requires the gates to be rerun on the final committed
+state.
+
+## Review state
+
+- The capability-policy package through `37facdf` has an independent
+  NeuralWatt `VERDICT | ACCEPT` with unchanged HEAD/status
+  fingerprints.
+- The network-classification package `79b1d4d` also has an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The round-trip contract package `cbfe594`, the tween-bridge
+  package `2ef0b1a`, the physics-frame `game_wait` package
+  `aff7ca1`, the C# / .NET gate package `ec07f4b`, the autoload
+  injection package `6d76606`, the asset-import-prerequisite
+  package (`88dda1e` / `76c9207`), the Defkil fork package identity
+  rebase `a1cae8b`, the manage-layers / manage-plugins
+  sibling-gate package `3874d81`, the set-main-scene /
+  manage-translations sibling-gate package `6407446`, and the
+  manage_shader sibling-gate package (this package) are each a
+  focused test file (or test file + minimal handler edit) and do
+  not require an independent NeuralWatt dispatch.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.
 
 ## Next safe action
 
-A focused test addition for `manage_shader` (replacing lexical
-`validatePath` with `this.pathPolicy.assertProject` and tightening the
-`shaderPath` regex to the same canonical `res://` shape) is the next
-bounded takeover package. It mirrors the prior sibling-gate pattern and
-can land without a Godot binary. Select only after fresh repository
-evidence and a bounded RED test. Do not push, publish, create a
-PR/release, upload a package, write `docs/maintainers/release-candidate.md`,
-or send the candidate-ready notification.
+The next bounded package is a focused test addition / minimal
+sibling hardening for `manage_ci_pipeline` and `manage_docker_export`
+(now that the `project.godot` injection surface and the
+`res://` canonical-member contract are both well-established in the
+sibling-handler pattern). The starting evidence is the absence of a
+`manage-ci-pipeline-injection.test.ts` / `manage-docker-export-injection.test.ts`
+regression and the same lexical-vs-`PathPolicy` shape the other
+sibling gates use. Mirror the `manage_layers` / `manage_plugins`
+sibling-gate pattern; land without a Godot binary. Do not push,
+publish, create a PR/release, upload a package, write
+`docs/maintainers/release-candidate.md`, or send the
+candidate-ready notification.

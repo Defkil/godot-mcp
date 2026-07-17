@@ -6949,10 +6949,43 @@ export class GodotServer {
   private async handleManageShader(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.shaderPath || !args.action) return createErrorResponse('projectPath, shaderPath, and action are required.');
-    if (!validatePath(args.projectPath) || !validatePath(args.shaderPath)) return createErrorResponse('Invalid path.');
-    const projectFile = join(args.projectPath, 'project.godot');
-    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
-    const fullPath = join(args.projectPath, args.shaderPath);
+    // Action allowlist: unknown actions are rejected with a typed envelope
+    // BEFORE any filesystem call, matching the sibling `set_main_scene` /
+    // `manage_translations` gates.
+    if (args.action !== 'read' && args.action !== 'create') {
+      return createErrorResponse(`Unknown action: ${args.action}`);
+    }
+    // Canonical res:// + project-member regex on shaderPath. A caller
+    // can no longer smuggle newlines, quotes, brackets, equals signs,
+    // or `..` segments; the legacy auto-prepend shortcut
+    // (`shaderPath.startsWith('res://') ? ... : 'res://' + ...`) is
+    // intentionally dropped, matching the sibling `manage_autoloads` /
+    // `manage_layers` / `manage_plugins` / `set_main_scene` /
+    // `manage_translations` gates.
+    const shaderPathRegex = /^res:\/\/(?!\.\.)(?!.*\.\.)[A-Za-z0-9_\-\/]+\.[A-Za-z0-9]+$/;
+    if (typeof args.shaderPath !== 'string' || !shaderPathRegex.test(args.shaderPath)) {
+      return createErrorResponse(`Invalid shaderPath: expected canonical res:// project member with extension, no newlines, quotes, brackets, equals signs, or ".." segments.`);
+    }
+    // Resolve the project root through the request-boundary PathPolicy
+    // (replaces lexical `validatePath`).
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch {
+      return createErrorResponse('Project path is outside the configured allowed roots.');
+    }
+    const projectFile = join(projectRoot, 'project.godot');
+    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${projectRoot}`);
+    // Resolve shaderPath through the same PathPolicy that gates the
+    // sibling handlers, so `..` and absolute-path bypasses cannot escape
+    // the project root even when the regex above is bypassed on a
+    // future change.
+    let fullPath: string;
+    try {
+      fullPath = this.pathPolicy.resolveProjectMember(projectRoot, args.shaderPath);
+    } catch (error: any) {
+      return createErrorResponse(`Invalid shaderPath: ${error?.message ?? 'rejected by path policy.'}`);
+    }
     try {
       if (args.action === 'read') {
         if (!existsSync(fullPath)) return createErrorResponse(`Shader not found: ${args.shaderPath}`);
