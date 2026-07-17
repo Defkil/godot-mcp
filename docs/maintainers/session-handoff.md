@@ -641,3 +641,81 @@ The repair remains local-only and does not push, publish, create a PR/release, u
 ## Next safe action
 
 The accepted local repair is ready for the next bounded takeover package. The highest-priority remaining package is the generic headless Godot test runner with GUT adapter (#29), but the Godot binary is unavailable here; select only after fresh repository evidence and a bounded RED test. Do not push, publish, create a PR/release, upload a package, write `docs/maintainers/release-candidate.md`, or send the candidate-ready notification.
+
+## Current package — Defkil fork package identity (release manifests)
+
+The takeover baseline carried the immediate-upstream package identity
+(`@tugcantopaloglu/godot-mcp@3.1.0`, `io.github.tugcantopaloglu/godot-mcp`,
+repository pointing at `github.com/tugcantopaloglu/godot-mcp`). A Defkil
+publication would have shipped under the wrong owner/namespace and
+wrong bug tracker, so the release manifests are rebased to:
+
+- npm scope: `@defkil/godot-mcp`
+- version: `4.0.0`
+- MCP Registry name: `io.github.Defkil/godot-mcp`
+- repository: `https://github.com/Defkil/godot-mcp`
+- bug tracker: `https://github.com/Defkil/godot-mcp/issues`
+
+The change is structural for the release contract: `scripts/sync-version.js`
+now propagates both name and version into `package-lock.json` (top-level
+and `packages['']`) and into the npm entry of `server.json`. The
+existing `version` script hook (`npm run version`) drives the same
+propagation, so any future `npm version patch/minor/major` keeps the
+three manifests aligned.
+
+`LICENSE` preserves the two predecessor MIT copyright lines
+(`Tugcan Topaloglu` 2025 for the 158-tool immediate upstream,
+`Solomon Elias` 2025 for the 20-tool original source) and adds a
+Defkil copyright line; the MIT permission grant and warranty disclaimer
+are unchanged. `README.md` keeps the inherited acknowledgements and
+adds a `Maintained by Defkil` line that names the package scope and
+the inheritance lineage.
+
+References to `tugcantopaloglu` and `Coding-Solo` in test files,
+source comments, and `docs/maintainers/issue-inventory.md` are
+**provenance links to upstream issue trackers** — they intentionally
+stay so the next reviewer can recover the issue history that drove each
+takeover decision. They are not ownership claims.
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every handler,
+  the 5 closed-list profiles, the path policy, the runtime bridge,
+  the MIT attribution, and the LICENSE structure;
+- does not touch `src/server.ts`, the tool registry, the capability
+  policy, the request limiter, the operation runner, the GDScript
+  surface, or any test fixture outside the new file;
+- does not push, publish, create a PR/release, upload a package,
+  write `docs/maintainers/release-candidate.md`, or send the
+  candidate-ready notification.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/package-identity.test.ts`: 1 file, 7 tests passed.
+- `npx vitest run tests/version-sync.test.ts`: 1 file, 5 tests passed
+  (regression coverage for the extended `syncVersions` contract).
+- `npm test`: 35 files, 702 tests passed (was 695 before this package).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed.
+- `npm pack --dry-run`: tarball name `defkil-godot-mcp-4.0.0.tgz`,
+  `npm notice name: @defkil/godot-mcp`, `npm notice version: 4.0.0`,
+  integrity recorded.
+
+Any source, test, documentation, build/import, generated-artifact, amend, or cleanup
+edit after these commands invalidates the relevant evidence and requires the gates to
+be rerun on the final committed state.
+
+## Review state
+
+- This package is a release-manifest change plus a script-extending
+  test addition. The identity contract is asserted by the focused
+  test file and by the existing `tests/version-sync.test.ts` (now
+  including the name-propagation contract). It does not require a
+  fresh NeuralWatt reviewer dispatch for the registry-tooling
+  invariants; if a future real-Godot regression surfaces a
+  release-coordination failure, it must satisfy the contract asserted
+  in `tests/package-identity.test.ts`.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.

@@ -488,7 +488,7 @@ The original godot-mcp provided 20 tools for basic project management and scene 
 ## Installation
 
 ```bash
-git clone https://github.com/tugcantopaloglu/godot-mcp.git
+git clone https://github.com/Defkil/godot-mcp.git
 cd godot-mcp
 npm install
 npm run build
@@ -676,3 +676,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Original project**: [godot-mcp](https://github.com/Coding-Solo/godot-mcp) by [Solomon Elias (Coding-Solo)](https://github.com/Coding-Solo) - provided the foundational MCP server architecture, headless operations system, and TCP interaction framework
 - **Extended by**: [Tugcan Topaloglu](https://github.com/tugcantopaloglu) - extended to 158 tools covering networking, 3D/2D rendering, UI controls, audio effects, animation trees, file I/O, runtime code execution, node manipulation, signals, project creation, camera control, physics, and comprehensive type conversion
+- **Maintained by**: [Defkil](https://github.com/Defkil) - generic, open-source fork with typed registry, capability profiles, request limiter, ephemeral authenticated bridge, asset-import prerequisite detection, and physics-frame-aware `game_wait`. Published as `@defkil/godot-mcp` v4.0.0; all 158 legacy tool contracts, the MIT attribution, and the inheritance lineage from `Coding-Solo/godot-mcp` (Solomon Elias) and `tugcantopaloglu/godot-mcp` (Tugcan Topaloglu) are preserved.

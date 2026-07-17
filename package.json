@@ -1,7 +1,7 @@
 {
-  "name": "@tugcantopaloglu/godot-mcp",
-  "version": "3.1.0",
-  "description": "MCP server for full Godot 4.x engine control with 157 tools for AI-driven game development",
+  "name": "@defkil/godot-mcp",
+  "version": "4.0.0",
+  "description": "MCP server for full Godot 4.x engine control with 158 tools for AI-driven game development",
   "keywords": [
     "godot",
     "mcp",
@@ -13,19 +13,20 @@
     "runtime",
     "model-context-protocol"
   ],
-  "homepage": "https://github.com/tugcantopaloglu/godot-mcp",
+  "homepage": "https://github.com/Defkil/godot-mcp",
   "bugs": {
-    "url": "https://github.com/tugcantopaloglu/godot-mcp/issues"
+    "url": "https://github.com/Defkil/godot-mcp/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/tugcantopaloglu/godot-mcp.git"
+    "url": "https://github.com/Defkil/godot-mcp.git"
   },
-  "mcpName": "io.github.tugcantopaloglu/godot-mcp",
+  "mcpName": "io.github.Defkil/godot-mcp",
   "license": "MIT",
-  "author": "Tugcan Topaloglu",
+  "author": "Defkil (https://github.com/Defkil)",
   "contributors": [
-    "Solomon Elias <solomon@sippy.ai> (https://github.com/Coding-Solo)"
+    "Tugcan Topaloglu (https://github.com/tugcantopaloglu) — immediate upstream author of the 158-tool fork",
+    "Solomon Elias <solomon@sippy.ai> (https://github.com/Coding-Solo) — original godot-mcp author"
   ],
   "type": "module",
   "bin": {

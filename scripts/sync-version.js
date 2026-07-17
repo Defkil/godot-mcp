@@ -14,17 +14,27 @@ export async function syncVersions(rootDir = process.cwd()) {
   const packageJson = await readJson(rootDir, 'package.json');
   const packageLock = await readJson(rootDir, 'package-lock.json');
   const server = await readJson(rootDir, 'server.json');
-  const { version } = packageJson;
+  const { name, version } = packageJson;
 
+  if (typeof name !== 'string' || name.length === 0) {
+    throw new Error('package.json must contain a name');
+  }
   if (typeof version !== 'string' || version.length === 0) {
     throw new Error('package.json must contain a version');
   }
 
+  packageLock.name = name;
   packageLock.version = version;
-  packageLock.packages[''].version = version;
-  server.version = version;
+  if (packageLock.packages && packageLock.packages['']) {
+    packageLock.packages[''].name = name;
+    packageLock.packages[''].version = version;
+  }
 
+  server.version = version;
   for (const entry of server.packages) {
+    if (entry.registryType === 'npm') {
+      entry.identifier = name;
+    }
     entry.version = version;
   }
 
