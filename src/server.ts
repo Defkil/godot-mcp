@@ -6987,13 +6987,22 @@ export class GodotServer {
   private async handleSetMainScene(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.scenePath) return createErrorResponse('projectPath and scenePath are required.');
-    if (!validatePath(args.projectPath)) return createErrorResponse('Invalid path.');
-    const projectFile = join(args.projectPath, 'project.godot');
-    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
+    const scenePathRegex = /^res:\/\/(?!\.\.)(?!.*\.\.)[A-Za-z0-9_\-\/]+\.[A-Za-z0-9]+$/;
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch {
+      return createErrorResponse('Project path is outside the configured allowed roots.');
+    }
+    if (!scenePathRegex.test(args.scenePath)) {
+      return createErrorResponse(`Invalid scenePath: expected canonical res:// project member with extension, no newlines, quotes, brackets, equals signs, or ".." segments.`);
+    }
+    const scenePath = args.scenePath;
+    const projectFile = join(projectRoot, 'project.godot');
+    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${projectRoot}`);
     try {
       let content = readFileSync(projectFile, 'utf8');
-      const resPath = args.scenePath.startsWith('res://') ? args.scenePath : `res://${args.scenePath}`;
-      const settingLine = `run/main_scene="${resPath}"`;
+      const settingLine = `run/main_scene="${scenePath}"`;
       const existingRegex = /run\/main_scene="[^"]*"/;
       if (existingRegex.test(content)) {
         content = content.replace(existingRegex, settingLine);
@@ -7005,7 +7014,7 @@ export class GodotServer {
         }
       }
       writeFileSync(projectFile, content, 'utf8');
-      return { content: [{ type: 'text', text: `Main scene set to ${resPath}` }] };
+      return { content: [{ type: 'text', text: `Main scene set to ${scenePath}` }] };
     } catch (error: any) {
       return createErrorResponse(`set_main_scene failed: ${error?.message || 'Unknown error'}`);
     }
@@ -7028,9 +7037,15 @@ export class GodotServer {
   private async handleManageTranslations(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.action) return createErrorResponse('projectPath and action are required.');
-    if (!validatePath(args.projectPath)) return createErrorResponse('Invalid path.');
-    const projectFile = join(args.projectPath, 'project.godot');
-    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
+    const translationPathRegex = /^res:\/\/(?!\.\.)(?!.*\.\.)[A-Za-z0-9_\-\/]+\.[A-Za-z0-9]+$/;
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch {
+      return createErrorResponse('Project path is outside the configured allowed roots.');
+    }
+    const projectFile = join(projectRoot, 'project.godot');
+    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${projectRoot}`);
     try {
       let content = readFileSync(projectFile, 'utf8');
       if (args.action === 'list') {
@@ -7039,7 +7054,10 @@ export class GodotServer {
         return { content: [{ type: 'text', text: JSON.stringify({ translations }, null, 2) }] };
       } else if (args.action === 'add') {
         if (!args.translationPath) return createErrorResponse('translationPath is required.');
-        const resPath = args.translationPath.startsWith('res://') ? args.translationPath : `res://${args.translationPath}`;
+        const resPath = args.translationPath;
+        if (!translationPathRegex.test(resPath)) {
+          return createErrorResponse(`Invalid translationPath: expected canonical res:// project member with extension, no newlines, quotes, brackets, equals signs, or ".." segments.`);
+        }
         const match = content.match(/translations=PackedStringArray\(([^)]*)\)/);
         if (match) {
           const existing = match[1];
@@ -7053,7 +7071,10 @@ export class GodotServer {
         return { content: [{ type: 'text', text: `Translation added: ${resPath}` }] };
       } else if (args.action === 'remove') {
         if (!args.translationPath) return createErrorResponse('translationPath is required.');
-        const resPath = args.translationPath.startsWith('res://') ? args.translationPath : `res://${args.translationPath}`;
+        const resPath = args.translationPath;
+        if (!translationPathRegex.test(resPath)) {
+          return createErrorResponse(`Invalid translationPath: expected canonical res:// project member with extension, no newlines, quotes, brackets, equals signs, or ".." segments.`);
+        }
         content = content.replace(new RegExp(`,?\\s*"${resPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`), '');
         writeFileSync(projectFile, content, 'utf8');
         return { content: [{ type: 'text', text: `Translation removed: ${resPath}` }] };

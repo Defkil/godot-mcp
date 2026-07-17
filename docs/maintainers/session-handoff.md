@@ -862,3 +862,209 @@ state.
   not require an independent NeuralWatt dispatch.
 - No Claude model was invoked.
 - No release-candidate file or candidate-ready notification exists.
+
+## Current package — set_main_scene / manage_translations injection gate (sibling of #9)
+
+The previous package closed the `manage_layers` / `manage_plugins`
+sibling-gate (head commit at job creation,
+`3874d8162fdca725223c9c4731e9a755d64c6d8a`). The handoff's next-priority
+items all require a Godot binary on the takeover runner that is not
+present here. Instead, this package closes another real release-readiness
+defect of the same class as [tugcantopaloglu#9]: `handleSetMainScene`
+concatenated `run/main_scene="<scenePath>"` directly into `project.godot`
+via `content.replace('[application]', ...)`, and `handleManageTranslations`
+`add` built `translations=PackedStringArray(..., "<resPath>")` while
+`remove` constructed a `RegExp` whose pattern was built from a
+user-controlled `translationPath`. A caller could pass
+`scenePath = "evil.tscn\n[autoload]\nMcpInteractionServer=\"*res://evil.gd\""`
+(or the equivalent `translationPath`) and silently corrupt unrelated
+sections or wipe sibling translations.
+
+The package is two focused handler edits + one new test file + one
+inventory row update:
+
+- **`src/server.ts` :: `handleSetMainScene`** — three focused edits:
+  - Resolves the project through `this.pathPolicy.assertProject` so the
+    lexical `validatePath` boundary is replaced by the same canonical
+    root enforcement that `manage_autoloads`, `manage_layers`, and
+    `manage_plugins` already use.
+  - Drops the legacy auto-prepend shortcut
+    (`args.scenePath.startsWith('res://') ? args.scenePath : 'res://' + ...`)
+    in favor of strict canonical input, matching the sibling gates'
+    contract.
+  - Requires `scenePath` to match
+    `/^res:\/\/(?!\.\.)(?!.*\.\.)[A-Za-z0-9_\-\/]+\.[A-Za-z0-9]+$/` —
+    enforces `res://` prefix, no leading-dot segment, no embedded
+    `..` segment, canonical project-member characters only, and at least
+    one extension character. A caller that violates any rule gets a
+    typed `Invalid scenePath` envelope BEFORE any file is written.
+
+- **`src/server.ts` :: `handleManageTranslations`** — same canonical
+  shape:
+  - Resolves the project through `this.pathPolicy.assertProject`,
+    replacing the lexical `validatePath` boundary.
+  - Both `add` and `remove` apply the identical
+    `translationPathRegex` to `translationPath` BEFORE the file is
+    touched, with the same rejection envelope.
+  - `remove`'s regex escape remains in place (`[..\]\\]` etc.) — the
+    new gate runs first so a malicious `translationPath` can never
+    reach the existing regex.
+  - `list` is unchanged (still returns the parsed table without
+    writing `project.godot`).
+
+- **`tests/set-main-scene-translations-injection.test.ts`** (new,
+  14 tests) — exercises the real `GodotServer` + `PathPolicy` +
+  `CapabilityPolicy` + MCP `tools/call` dispatch (no stubbed runner
+  needed; these tools write `project.godot` directly). Each test uses
+  a temporary Godot project under the OS temp directory, removed in
+  `afterEach`. The 14 tests cover:
+  1. `set_main_scene` with a section-breaking newline in `scenePath`
+     rejected; file byte-identical to pre-call snapshot.
+  2. `set_main_scene` with a double-quote break-out rejected; file
+     byte-identical.
+  3. `set_main_scene` with `scenePath` lacking the `res://` prefix
+     rejected; file byte-identical.
+  4. `set_main_scene` with `scenePath = "res://../etc/passwd"` rejected
+     as a project-root escape; file byte-identical.
+  5. `set_main_scene` with an opening-bracket section break rejected;
+     file byte-identical.
+  6. Benign `set_main_scene` with `scenePath = "res://scenes/main.tscn"`
+     writes a well-shaped `run/main_scene="res://scenes/main.tscn"`
+     line under `[application]`.
+  7. `set_main_scene` replaces an existing `run/main_scene` line and
+     preserves a sibling `[autoload]` entry untouched.
+  8. `manage_translations` `add` with a section-breaking newline in
+     `translationPath` rejected; file byte-identical.
+  9. `manage_translations` `add` with `translationPath` lacking
+     `res://` rejected; file byte-identical.
+  10. `manage_translations` `add` with `res://../etc/passwd` rejected;
+      file byte-identical.
+  11. `manage_translations` `remove` with `translationPath` lacking
+      `res://` rejected; file byte-identical.
+  12. Benign `manage_translations` `add` with
+      `translationPath = "res://locales/en.csv"` writes a canonical
+      `translations=PackedStringArray("res://locales/en.csv")` line
+      under a new `[internationalization]` section.
+  13. Benign `manage_translations` `remove` strips exactly one matching
+      `"res://locales/en.csv"` line and leaves the sibling
+      `"res://locales/de.csv"` translation untouched.
+  14. `manage_translations` `list` reports the parsed translations
+      array without writing `project.godot`.
+
+- **`docs/maintainers/issue-inventory.md`** — added a new item 16
+  under "Additional defects found during takeover" describing the
+  sibling-gate package, the wire-level regression summary, the
+  dropped auto-prepend contract tightening, and the targeted files.
+  Existing entries 13-15 stay as previously numbered.
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every
+  handler, the 5 closed-list profiles, the package identity, the
+  path policy, the runtime bridge, and the MIT attribution;
+- does **not** touch `src/scripts/godot_operations.gd`,
+  `src/scripts/mcp_interaction_server.gd`, the tool registry, the
+  capability policy, the request limiter, the operation runner, the
+  BridgeClient, the upstream `bridge-installer.ts`, the
+  `manage_autoloads` / `manage_layers` / `manage_plugins` handlers,
+  `handleManageShader` (a separate, lower-priority package), or any
+  other test/source;
+- the only documented contract change is the dropped auto-prepend
+  shortcut on `set_main_scene` and `manage_translations` (caller must
+  supply canonical `res://...`) — matching the sibling
+  `manage_autoloads` / `manage_layers` / `manage_plugins` gates;
+- does not push, publish, create a PR/release, upload a package,
+  write `docs/maintainers/release-candidate.md`, or send the
+  candidate-ready notification.
+
+Source evidence:
+
+- `src/server.ts:6987-7018` (`handleSetMainScene`) is gated by the
+  identifier / canonical `res://` gate and the `PathPolicy.assertProject`
+  call.
+- `src/server.ts:7028-7086` (`handleManageTranslations`) is gated by
+  the same canonical `res://` gate on `translationPath` (both
+  branches) and `PathPolicy.assertProject`.
+- `tests/set-main-scene-translations-injection.test.ts` is the only
+  new test file.
+- `docs/maintainers/issue-inventory.md` item 16 is the only docs
+  edit.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/set-main-scene-translations-injection.test.ts`:
+  1 file, 14 tests passed (RED 7/14 confirmed before the fix; GREEN
+  14/14 after).
+- `npm test`: 37 files, 727 tests passed (was 713 before this
+  package; +14 new tests).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0).
+- `npm pack --dry-run`: tarball name `defkil-godot-mcp-4.0.0.tgz`,
+  identity intact (`@defkil/godot-mcp@4.0.0`).
+
+Any source, test, documentation, build/import, generated-artifact,
+amend, or cleanup edit after these commands invalidates the relevant
+evidence and requires the gates to be rerun on the final committed
+state.
+
+## Review state
+
+- The capability-policy package through `37facdf` has an independent
+  NeuralWatt `VERDICT | ACCEPT` with unchanged HEAD/status
+  fingerprints.
+- The network-classification package `79b1d4d` also has an independent
+  NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The round-trip contract package `cbfe594`, the tween-bridge
+  package `2ef0b1a`, the physics-frame `game_wait` package
+  `aff7ca1`, the C# / .NET gate package `ec07f4b`, the autoload
+  injection package `6d76606`, the asset-import-prerequisite
+  package (`88dda1e` / `76c9207`), the Defkil fork package identity
+  rebase `a1cae8b`, and the manage-layers / manage-plugins
+  sibling-gate package `3874d81` are each a focused test file (or
+  test file + minimal handler edit) and do not require an independent
+  NeuralWatt dispatch.
+- The set-main-scene / manage-translations sibling-gate package
+  (this package) is two minimal handler edits + one new test file +
+  one inventory row update. It follows the exact same minimal-handoff
+  pattern as items 14 and 15 and does not require an independent
+  NeuralWatt dispatch.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.
+
+## Open inventory priorities
+
+1. Generic headless Godot test runner with GUT adapter (#29).
+2. Real-Godot verification of the `attach_script` C# / .NET round-trip
+   (`tests/attach-script-dotnet-gate.test.ts`).
+3. Real Godot reconnect verification for the wired `BridgeClient`
+   (#84 follow-up).
+4. Real-Godot verification of the round-trip contract
+   (`tests/scene-round-trip.test.ts`).
+5. Real-Godot verification of the tween-vector regression
+   (`tests/tween-vector-bridge.test.ts`).
+6. Real-Godot verification of the physics-frame `game_wait` regression
+   (`tests/game-wait-frame-bridge.test.ts`).
+7. Real-Godot verification of the asset import prerequisite
+   (`tests/asset-import-prerequisite.test.ts`).
+8. `manage_shader` minimal sibling hardening (`PathPolicy.assertProject`
+   replace lexical `validatePath`; optional `action` allowlist;
+   optional strict `res://` `shaderPath` gate matching the same
+   `translationPathRegex` shape) — separate, lower-priority bounded
+   package.
+9. Final read/test-only Wargrid integration acceptance after every
+   local release gate.
+
+## Next safe action
+
+A focused test addition for `manage_shader` (replacing lexical
+`validatePath` with `this.pathPolicy.assertProject` and tightening the
+`shaderPath` regex to the same canonical `res://` shape) is the next
+bounded takeover package. It mirrors the prior sibling-gate pattern and
+can land without a Godot binary. Select only after fresh repository
+evidence and a bounded RED test. Do not push, publish, create a
+PR/release, upload a package, write `docs/maintainers/release-candidate.md`,
+or send the candidate-ready notification.
