@@ -5659,6 +5659,20 @@ export class GodotServer {
     const projectFile = join(args.projectPath, 'project.godot');
     if (!existsSync(projectFile))
       return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
+    // Sibling of [tugcantopaloglu#9]: gate `actionName` against a strict
+    // identifier regex BEFORE any file write. The legacy code interpolated
+    // `${args.actionName}` directly into `project.godot`, which let a caller
+    // smuggle a newline + section header (e.g. `\n[autoload]\nFoo="..."`) into
+    // the input-map table and silently corrupt unrelated sections, or pass
+    // `.*` as the action name and let the `remove` regex wipe every sibling
+    // input action in the same scope.
+    if ((args.action === 'add' || args.action === 'remove') && args.actionName !== undefined) {
+      if (typeof args.actionName !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(args.actionName)) {
+        return createErrorResponse(
+          `Invalid input action name: must match /^[A-Za-z_][A-Za-z0-9_]*$/ (got ${JSON.stringify(args.actionName)}).`,
+        );
+      }
+    }
     try {
       let content = readFileSync(projectFile, 'utf8');
       if (args.action === 'list') {
@@ -5675,7 +5689,6 @@ export class GodotServer {
         if (!args.actionName)
           return createErrorResponse('actionName is required for add action.');
         const deadzone = args.deadzone !== undefined ? args.deadzone : 0.5;
-        const escapedName = args.actionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         let newEventObj = '';
         let scancode = 0;
         if (args.key) {
@@ -5685,7 +5698,10 @@ export class GodotServer {
 
         // Look for an existing top-level entry for this action so we can merge
         // the new event into it instead of appending a duplicate `actionname=` line.
-        const existingActionPattern = new RegExp(`^${escapedName}\\s*=\\s*\\{[\\s\\S]*?\\}\\s*$`, 'm');
+        // The regex is anchored per-line and the action name has already been
+        // validated against the strict identifier regex, so it cannot smuggle
+        // wildcards or section breaks through the match.
+        const existingActionPattern = new RegExp(`^${args.actionName}\\s*=\\s*\\{[\\s\\S]*?\\}\\s*$`, 'm');
         const existingMatch = content.match(existingActionPattern);
 
         if (existingMatch) {
@@ -5723,7 +5739,10 @@ export class GodotServer {
       } else if (args.action === 'remove') {
         if (!args.actionName)
           return createErrorResponse('actionName is required for remove action.');
-        const pattern = new RegExp(`\\n?${args.actionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*=.*\\n?`, 'g');
+        // The action name has already been validated against the strict
+        // identifier regex, so the line-anchored regex cannot be tricked
+        // into wiping sibling actions.
+        const pattern = new RegExp(`\\n?${args.actionName}\\s*=.*\\n?`, 'g');
         content = content.replace(pattern, '\n');
         writeFileSync(projectFile, content, 'utf8');
         return { content: [{ type: 'text', text: `Input action "${args.actionName}" removed.` }] };
@@ -5752,55 +5771,78 @@ export class GodotServer {
   }
 
   private async handleManageExportPresets(args: any) {
-    args = normalizeParameters(args || {});
-    if (!args.projectPath || !args.action)
-      return createErrorResponse('projectPath and action are required.');
-    if (!validatePath(args.projectPath))
-      return createErrorResponse('Invalid path.');
-    const projectFile = join(args.projectPath, 'project.godot');
-    if (!existsSync(projectFile))
-      return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
-    const presetsFile = join(args.projectPath, 'export_presets.cfg');
-    try {
-      if (args.action === 'list') {
-        if (!existsSync(presetsFile))
-          return { content: [{ type: 'text', text: JSON.stringify({ presets: [] }, null, 2) }] };
-        const content = readFileSync(presetsFile, 'utf8');
-        const presets: Array<{ name: string; platform: string }> = [];
-        const nameMatches = content.matchAll(/name="([^"]+)"/g);
-        const platformMatches = content.matchAll(/platform="([^"]+)"/g);
-        const names = [...nameMatches].map(m => m[1]);
-        const platforms = [...platformMatches].map(m => m[1]);
-        for (let i = 0; i < names.length; i++) {
-          presets.push({ name: names[i], platform: platforms[i] || 'unknown' });
+      args = normalizeParameters(args || {});
+      if (!args.projectPath || !args.action)
+        return createErrorResponse('projectPath and action are required.');
+      if (!validatePath(args.projectPath))
+        return createErrorResponse('Invalid path.');
+      const projectFile = join(args.projectPath, 'project.godot');
+      if (!existsSync(projectFile))
+        return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
+      const presetsFile = join(args.projectPath, 'export_presets.cfg');
+      // Sibling of [tugcantopaloglu#9]: gate `name` and `platform` against
+      // strict allowlists BEFORE any file write. The legacy code interpolated
+      // `${args.name}` and `${args.platform}` directly into a Godot INI-style
+      // block in `export_presets.cfg`, which let a caller smuggle a newline +
+      // new section header (e.g. `\n[preset.9999]\nname="Other"`) into the
+      // config and silently corrupt unrelated presets, or pass `.*` as the
+      // name and let the `remove` regex wipe every sibling preset block.
+      if (args.action === 'add' || args.action === 'remove') {
+        if (typeof args.name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(args.name)) {
+          return createErrorResponse(
+            `Invalid preset name: must match /^[A-Za-z_][A-Za-z0-9_]*$/ (got ${JSON.stringify(args.name)}).`,
+          );
         }
-        return { content: [{ type: 'text', text: JSON.stringify({ presets }, null, 2) }] };
-      } else if (args.action === 'add') {
-        if (!args.name || !args.platform)
-          return createErrorResponse('name and platform are required for add action.');
-        const runnable = args.runnable ? 'true' : 'false';
-        const presetBlock = `\n[preset.${Date.now()}]\n\nname="${args.name}"\nplatform="${args.platform}"\nrunnable=${runnable}\n`;
-        let content = existsSync(presetsFile) ? readFileSync(presetsFile, 'utf8') : '';
-        content += presetBlock;
-        writeFileSync(presetsFile, content, 'utf8');
-        return { content: [{ type: 'text', text: `Export preset "${args.name}" added for platform "${args.platform}".` }] };
-      } else if (args.action === 'remove') {
-        if (!args.name)
-          return createErrorResponse('name is required for remove action.');
-        if (!existsSync(presetsFile))
-          return createErrorResponse('No export_presets.cfg file found.');
-        let content = readFileSync(presetsFile, 'utf8');
-        // Remove the preset section containing the given name
-        const pattern = new RegExp(`\\[preset\\.[^\\]]+\\]\\s*\\n[\\s\\S]*?name="${args.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[\\s\\S]*?(?=\\[preset\\.|$)`, 'g');
-        content = content.replace(pattern, '');
-        writeFileSync(presetsFile, content, 'utf8');
-        return { content: [{ type: 'text', text: `Export preset "${args.name}" removed.` }] };
       }
-      return createErrorResponse('Invalid action. Use "list", "add", or "remove".');
-    } catch (error: any) {
-      return createErrorResponse(`Failed to manage export presets: ${error?.message || 'Unknown error'}`);
+      if (args.action === 'add') {
+        if (typeof args.platform !== 'string' || !/^[A-Za-z][A-Za-z0-9 _.\-/]*$/.test(args.platform)) {
+          return createErrorResponse(
+            `Invalid preset platform: must start with a letter and contain only letters, digits, spaces, dot, underscore, hyphen, or forward-slash (got ${JSON.stringify(args.platform)}).`,
+          );
+        }
+      }
+      try {
+        if (args.action === 'list') {
+          if (!existsSync(presetsFile))
+            return { content: [{ type: 'text', text: JSON.stringify({ presets: [] }, null, 2) }] };
+          const content = readFileSync(presetsFile, 'utf8');
+          const presets: Array<{ name: string; platform: string }> = [];
+          const nameMatches = content.matchAll(/name="([^"]+)"/g);
+          const platformMatches = content.matchAll(/platform="([^"]+)"/g);
+          const names = [...nameMatches].map(m => m[1]);
+          const platforms = [...platformMatches].map(m => m[1]);
+          for (let i = 0; i < names.length; i++) {
+            presets.push({ name: names[i], platform: platforms[i] || 'unknown' });
+          }
+          return { content: [{ type: 'text', text: JSON.stringify({ presets }, null, 2) }] };
+        } else if (args.action === 'add') {
+          if (!args.name || !args.platform)
+            return createErrorResponse('name and platform are required for add action.');
+          const runnable = args.runnable ? 'true' : 'false';
+          const presetBlock = `\n[preset.${Date.now()}]\n\nname="${args.name}"\nplatform="${args.platform}"\nrunnable=${runnable}\n`;
+          let content = existsSync(presetsFile) ? readFileSync(presetsFile, 'utf8') : '';
+          content += presetBlock;
+          writeFileSync(presetsFile, content, 'utf8');
+          return { content: [{ type: 'text', text: `Export preset "${args.name}" added for platform "${args.platform}".` }] };
+        } else if (args.action === 'remove') {
+          if (!args.name)
+            return createErrorResponse('name is required for remove action.');
+          if (!existsSync(presetsFile))
+            return createErrorResponse('No export_presets.cfg file found.');
+          let content = readFileSync(presetsFile, 'utf8');
+          // Remove the preset section containing the given name. The name has
+          // already been validated against the strict identifier regex, so the
+          // line-anchored regex cannot be tricked into wiping sibling presets.
+          const pattern = new RegExp(`\\[preset\\.[^\\]]+\\]\\s*\\n[\\s\\S]*?name="${args.name}"[\\s\\S]*?(?=\\[preset\\.|$)`, 'g');
+          content = content.replace(pattern, '');
+          writeFileSync(presetsFile, content, 'utf8');
+          return { content: [{ type: 'text', text: `Export preset "${args.name}" removed.` }] };
+        }
+        return createErrorResponse('Invalid action. Use "list", "add", or "remove".');
+      } catch (error: any) {
+        return createErrorResponse(`Failed to manage export presets: ${error?.message || 'Unknown error'}`);
+      }
     }
-  }
 
   // --- Advanced runtime handlers ---
 

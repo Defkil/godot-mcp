@@ -163,3 +163,37 @@ Oliver explicitly approves the exact reviewed candidate.
     migration is filed as the next-follow-up release gate. The handler-body gate
     mirrors item 19 and matches the sibling `manage_shader` /
     `set_main_scene` / `manage_translations` / `core_file_io` pattern.
+
+21. The same content-injection class persisted in `handleManageInputMap`
+    and `handleManageExportPresets`. `manage_input_map` interpolated
+    `${args.actionName}` directly into a Godot input-map block under
+    `[input]` and built its lookup/remove `RegExp` from a partially
+    escaped user string; `manage_export_presets` interpolated
+    `${args.name}` and `${args.platform}` directly into a Godot
+    INI-style block in `export_presets.cfg`. A caller could pass
+    `actionName = "Evil\n[autoload]\nFoo=\"*res://evil.gd\""` (or the
+    equivalent `name` for export presets) to silently corrupt
+    unrelated sections, or pass `actionName = ".*"` and let the
+    `remove` regex wipe every sibling input action / preset block in
+    the same regex scope. The lexical `validatePath` boundary on
+    `projectPath` only rejected empty / `..`-bearing strings (letting
+    newlines / quotes / brackets through). The takeover now applies
+    the same strict identifier gate as items 14-18:
+    `manage_input_map` `add` and `remove` require `actionName` to
+    match `/^[A-Za-z_][A-Za-z0-9_]*$/`; `manage_export_presets`
+    `add` requires `name` to match the same strict identifier regex
+    and `platform` to match `/^[A-Za-z][A-Za-z0-9 _.\-/]*$/` (a
+    Godot-platform-shaped value that accepts `Windows Desktop`,
+    `Linux/X11`, `macOS`, `Web`, `Android`, `iOS` and rejects
+    newlines, quotes, brackets, and `;`); `manage_export_presets`
+    `remove` uses the same identifier gate on `name`. Both handlers
+    are atomic: every rejection must leave the underlying file
+    byte-identical to its pre-call snapshot. Wire-level coverage in
+    `tests/manage-input-map-export-presets-injection.test.ts` (13
+    tests): 3 `manage_input_map` rejection branches (section-breaking
+    newline, equals sign, regex wildcard), 1 benign `add`, 1 precise
+    `remove`, 1 `list`; 4 `manage_export_presets` rejection branches
+    (section-breaking newline, closing bracket, non-allowlist
+    platform, regex wildcard), 1 benign `add`, 1 precise `remove`,
+    1 `list`. The byte-identical rollback assertion is repeated
+    after every rejected mutation.
