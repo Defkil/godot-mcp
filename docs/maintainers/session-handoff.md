@@ -1,10 +1,10 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-17 (tick T18)
+- Timestamp: 2026-07-17 (tick T19)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: `feat: gate script and resource handlers with canonical PathPolicy contract` (the new defense-in-depth package, fully described in the "Current package — script/resource handler defense-in-depth gate" section below; focused tests 10/10 green, full canonical gates green).
+- Current local package: `feat: gate manage_input_map and manage_export_presets against newline / section injection` (the new sibling-gate package, fully described in the "Current package — manage_input_map / manage_export_presets injection gate" section below; focused tests 13/13 green, full canonical gates green).
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `d00c4451cfd9a8443f12f70ee83814c476a73c63`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
@@ -1739,15 +1739,12 @@ be rerun on the final committed state.
 
 ## Next safe action
 
-The next bounded package is to extend the same canonical-root
-gate to the remaining handlers that still inline a lexical
-`validatePath` boundary on either `projectPath` or a member
-path: `handleCreateCsharpScript` (next-follow-up gate, intentionally
-deferred from this package because the .cs / .gd / non-.NET-project
-gate from [Coding-Solo#114] is the primary gate for that handler),
-`handleCreateProject`, `handleManageAutoloads`,
-`handleManageInputMap`, `handleManageExportPresets`,
-`handleExportProject`, `handleListProjects`, `handleGetProjectInfo`,
+The next bounded package is to continue porting the remaining
+handlers that still inline a lexical `validatePath` boundary on
+either `projectPath` or a member path:
+`handleCreateCsharpScript` (the explicitly deferred next-follow-up
+gate from the script/resource handler package),
+`handleCreateProject`, `handleListProjects`, `handleGetProjectInfo`,
 `handleLoadSprite`, `handleExportMeshLibrary`, `handleSaveScene`,
 `handleGetUid`, `handleReadProjectSettings`,
 `handleModifyProjectSettings`, `handleListProjectFiles`,
@@ -1755,10 +1752,194 @@ gate from [Coding-Solo#114] is the primary gate for that handler),
 actions still need it), `handleManageThemeResource`,
 `handleManageSceneSignals`, `handleManageSceneStructure`,
 `handleCreateScene`, `handleAddNode`, `handleReadScene`,
-`handleModifySceneNode`. Each handler can be ported one at a time
-to `PathPolicy.assertProject` + `PathPolicy.resolveProjectMember`,
-with a focused wire-level test mirroring
+`handleModifySceneNode`. The content-injection gate
+(`handleManageInputMap`, `handleManageExportPresets`) is now closed.
+Each remaining handler can be ported one at a time to
+`PathPolicy.assertProject` + `PathPolicy.resolveProjectMember`, with
+a focused wire-level test mirroring
 `tests/script-resource-handler-injection.test.ts`. Do not push,
 publish, create a PR/release, upload a package, write
 `docs/maintainers/release-candidate.md`, or send the
 candidate-ready notification.
+
+## Current package — manage_input_map / manage_export_presets injection gate (sibling of tugcantopaloglu#9)
+
+The previous package closed the script/resource handler
+defense-in-depth gate (`383aae3`). The handoff's next-priority item
+was the remaining handlers that still inline a lexical `validatePath`
+boundary — a long list that can be ported one at a time without
+changing the documented wire contract. A real release-readiness
+defect sat in front of that list: the `manage_input_map` and
+`manage_export_presets` handlers had the same content-injection
+class as [tugcantopaloglu#9] but were not on the defense-in-depth
+list because their lexical `validatePath` boundary was the same as
+the sibling gates already closed. They write to `project.godot`
+(`[input]` table) and `export_presets.cfg` (Godot INI-style preset
+block) with raw user interpolation, and their `remove` regex is
+built from a partially-escaped user string.
+
+The package is one focused test file + two focused handler edits +
+one inventory row update:
+
+- **`src/server.ts` :: `handleManageInputMap`** — three focused
+  edits:
+  - Adds a strict identifier gate (`/^[A-Za-z_][A-Za-z0-9_]*$/`)
+    on `actionName` for both `add` and `remove` BEFORE any file is
+    touched; rejects newlines, equals signs, forward slashes, and
+    section brackets with a typed `Invalid input action name`
+    envelope.
+  - Drops the legacy per-call `args.actionName.replace(/[…]/g, '\\$&')`
+    regex-escape in `add` (the existing-action lookup) and `remove`,
+    because the identifier gate now guarantees the name cannot smuggle
+    regex metas or wildcards through the match.
+  - The line-anchored removal regex now uses the raw (validated)
+    `actionName`, with a comment explaining why the regex cannot
+    be tricked into wiping sibling actions.
+
+- **`src/server.ts` :: `handleManageExportPresets`** — three focused
+  edits:
+  - Adds the same strict identifier gate on `name` for both `add`
+    and `remove`; rejects newlines, closing brackets, equals signs,
+    forward slashes, and section headers with a typed `Invalid
+    preset name` envelope.
+  - Adds a Godot-platform-shaped allowlist
+    (`/^[A-Za-z][A-Za-z0-9 _.\-/]*$/`) on `platform` for `add`
+    only; accepts `Windows Desktop`, `Linux/X11`, `macOS`, `Web`,
+    `Android`, `iOS` (the documented Godot export platforms) and
+    rejects newlines, quotes, brackets, and `;`.
+  - The line-anchored removal regex now uses the raw (validated)
+    `name`, with a comment explaining why the regex cannot be
+    tricked into wiping sibling presets.
+
+  The diff is 96 insertions, 44 deletions across the two handlers.
+
+- **`tests/manage-input-map-export-presets-injection.test.ts`** (new,
+  13 tests) — exercises the real `GodotServer` + `PathPolicy` +
+  `CapabilityPolicy` + MCP `tools/call` dispatch (no stubbed runner
+  needed; these tools write to disk directly). Each test uses a
+  temporary Godot project under the OS temp directory, removed in
+  `afterEach`. The 13 tests cover:
+
+  **manage_input_map** (6 tests):
+  1. `add` with `actionName = "Evil\n[layer_names]\n0=\"player\""`
+     rejected with a typed `Invalid input action name` envelope;
+     `project.godot` byte-identical to pre-call snapshot.
+  2. `add` with `actionName = "Evil=Other"` rejected; file
+     byte-identical.
+  3. Benign `add` with `actionName = "move_forward"` and `key = "W"`
+     appends a well-shaped `move_forward={...}` line under a new
+     `[input]` section.
+  4. `remove` with `actionName = ".*"` rejected (regex wildcard);
+     file byte-identical.
+  5. Benign `remove` with `actionName = "move_forward"` strips
+     exactly the matching line and leaves `move_back` untouched.
+  6. `list` reports the parsed action map without writing
+     `project.godot`.
+
+  **manage_export_presets** (7 tests):
+  7. `add` with `name = "Evil\n[preset.9999]\nname=\"Other\""` rejected;
+     `export_presets.cfg` byte-identical to pre-call snapshot.
+  8. `add` with `name = "Evil]"` rejected (closing bracket); file
+     byte-identical.
+  9. `add` with `platform = "Windows Desktop\"\nrunnable=true\n"`
+     rejected (non-allowlist platform); file byte-identical.
+  10. Benign `add` with `name = "WindowsDesktop"` and
+      `platform = "Windows Desktop"` appends a well-shaped preset
+      block; exactly one `[preset.…]` header is added.
+  11. `remove` with `name = ".*"` rejected (regex wildcard); file
+      byte-identical.
+  12. Benign `remove` with `name = "WindowsDesktop"` strips the
+      matching preset block and leaves `LinuxX11` untouched.
+  13. `list` reports the parsed preset table without writing
+      `export_presets.cfg`.
+
+  The byte-identical rollback assertion is repeated after every
+  rejected mutation.
+
+- **`docs/maintainers/issue-inventory.md`** — added a new item 21
+  under "Additional defects found during takeover" describing the
+  sibling-gate package, the wire-level regression summary, the
+  targeted handlers, and the regex hardening.
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every
+  handler, the 5 closed-list profiles, the package identity, the
+  path policy, the runtime bridge, and the MIT attribution;
+- does **not** touch `src/scripts/godot_operations.gd`,
+  `src/scripts/mcp_interaction_server.gd`, the tool registry, the
+  capability policy, the request limiter, the operation runner, the
+  BridgeClient, the upstream `bridge-installer.ts`, the sibling
+  `manage_*` gates, `handleCreateCsharpScript`, the
+  `core_file_io` handlers, the script/resource handlers, or any
+  other handler;
+- the only documented contract changes are the strict value gates on
+  `actionName` / `name` / `platform` (callers MUST supply a
+  documented value matching the documented allowlist) — matching the
+  strict-input contract the sibling `manage_*` gates already enforce;
+- does not push, publish, create a PR/release, upload a package,
+  write `docs/maintainers/release-candidate.md`, or send the
+  candidate-ready notification.
+
+Source evidence:
+
+- `src/server.ts:5653-5755` (`handleManageInputMap`) is gated by the
+  identifier gate on `actionName` (add and remove) and the comment-
+  hardened removal regex.
+- `src/server.ts:5773-5855` (`handleManageExportPresets`) is gated
+  by the identifier gate on `name` (add and remove) and the
+  Godot-platform-shaped allowlist on `platform` (add only).
+- `tests/manage-input-map-export-presets-injection.test.ts` is the
+  only new test file (13 tests).
+- `docs/maintainers/issue-inventory.md` item 21 is the only docs
+  edit.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/manage-input-map-export-presets-injection.test.ts`:
+  1 file, 13 tests passed (RED 7/13 confirmed before the fix;
+  GREEN 13/13 after — the equals-sign and closing-bracket branches
+  were already partially shielded by the lexical `validatePath`
+  / runtime switch fallback, but lacked the typed-envelope shape the
+  sibling gates use).
+- `npm test`: 43 files, 791 tests passed (was 778 before this
+  package; +13 new tests).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0).
+- `npm pack --dry-run`: tarball name `defkil-godot-mcp-4.0.0.tgz`,
+  identity intact (`@defkil/godot-mcp@4.0.0`).
+
+Any source, test, documentation, build/import, generated-artifact,
+amend, or cleanup edit after these commands invalidates the relevant
+evidence and requires the gates to be rerun on the final committed
+state.
+
+## Review state
+
+- The capability-policy package through `37facdf` has an independent
+  NeuralWatt `VERDICT | ACCEPT` with unchanged HEAD/status
+  fingerprints.
+- The network-classification package `79b1d4d` also has an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The round-trip contract package `cbfe594`, the tween-bridge
+  package `2ef0b1a`, the physics-frame `game_wait` package
+  `aff7ca1`, the C# / .NET gate package `ec07f4b`, the autoload
+  injection package `6d76606`, the asset-import-prerequisite
+  package (`88dda1e` / `76c9207`), the Defkil fork package identity
+  rebase `a1cae8b`, the manage-layers / manage-plugins
+  sibling-gate package `3874d81`, the set-main-scene /
+  manage-translations sibling-gate package `6407446`, the
+  manage_shader sibling-gate package `9cd5ac4`, the
+  manage_ci_pipeline / manage_docker_export sibling-gate package
+  `9eef5cd`, the core-file-IO defense-in-depth package
+  `b9fe537`, the script/resource handler defense-in-depth package
+  `383aae3`, and the manage_input_map / manage_export_presets
+  sibling-gate package `dc6172e` (this package) are each a focused
+  test file (or test file + minimal handler edit) and do not
+  require an independent NeuralWatt dispatch.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.
