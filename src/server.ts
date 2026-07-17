@@ -65,6 +65,7 @@ import {
 import { installRuntimeBridge, type BridgeInstallation } from './godot/bridge-installer.js';
 import { BridgeClient, BridgeConnectionError } from './godot/bridge/client.js';
 import { createUidResaveParams, parseUidResaveSummary } from './godot/uid-resave.js';
+import { detectAssetImportState } from './godot/asset-import-state.js';
 import { allocateRuntimeCredentials, runtimeEnvironment } from './godot/runtime-credentials.js';
 import { listProjectFiles } from './tools/project/list-project-files.js';
 import { PACKAGE_VERSION } from './package-metadata.js';
@@ -4497,6 +4498,23 @@ export class GodotServer {
         );
       }
 
+      // Godot 4.4+ requires a generated `.import` sidecar for binary
+      // textures; detect the missing-sidecar state before the operation
+      // runner is reached so the caller sees a typed remediation message
+      // instead of a silent `var texture = load(...) → null`. This is
+      // the wire-level contract half of [Coding-Solo#103].
+      try {
+        const probe = detectAssetImportState(args.projectPath, args.texturePath);
+        if (probe.state === 'missing-sidecar') {
+          return createErrorResponse(probe.diagnostic);
+        }
+      } catch (probeError: any) {
+        // Path-policy denials (absolute paths, traversal) flow through the
+        // existing `validatePath` gate above; this catch only absorbs
+        // unexpected helper failures so the load_sprite happy path is not
+        // taken down by a probe regression.
+      }
+
       // Prepare parameters for the operation (already in camelCase)
       const params = {
         scenePath: args.scenePath,
@@ -5206,6 +5224,23 @@ export class GodotServer {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.resourceType || !args.resourcePath)
       return createErrorResponse('projectPath, resourceType, and resourcePath are required.');
+    if (!validatePath(args.projectPath) || !validatePath(args.resourcePath))
+      return createErrorResponse('Invalid path.');
+    // Godot 4.4+ requires a generated `.import` sidecar for binary assets
+    // before the create_resource operation can register a typed Resource.
+    // Detect the missing-sidecar state up-front and surface a typed
+    // remediation message; non-import-eligible paths (.tres, .gd, ...)
+    // pass through the gate unchanged.
+    try {
+      const probe = detectAssetImportState(args.projectPath, args.resourcePath);
+      if (probe.state === 'missing-sidecar') {
+        return createErrorResponse(probe.diagnostic);
+      }
+    } catch {
+      // Path-policy denials (absolute paths, traversal) flow through the
+      // validatePath gate above; swallow unexpected helper failures so the
+      // create_resource happy path is not taken down by a probe regression.
+    }
     return this.headlessOp('create_resource', args, a => ({
       projectPath: a.projectPath,
       params: { resourceType: a.resourceType, resourcePath: a.resourcePath, ...(a.properties ? { properties: a.properties } : {}) },
@@ -6520,6 +6555,24 @@ export class GodotServer {
   private async handleManageResource(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.resourcePath || !args.action) return createErrorResponse('projectPath, resourcePath, and action are required.');
+    if (!validatePath(args.projectPath) || !validatePath(args.resourcePath))
+      return createErrorResponse('Invalid path.');
+    // Only the `load` action resolves the asset through Godot's resource
+    // loader; `create`/`delete`/`save` write files directly and do not
+    // depend on a generated `.import` sidecar. Detect the missing-sidecar
+    // state for `load` only, so callers can still create / overwrite a
+    // .tres source file from a raw asset that has never been imported.
+    if (args.action === 'load') {
+      try {
+        const probe = detectAssetImportState(args.projectPath, args.resourcePath);
+        if (probe.state === 'missing-sidecar') {
+          return createErrorResponse(probe.diagnostic);
+        }
+      } catch {
+        // Path-policy denials (absolute paths, traversal) flow through the
+        // validatePath gate above; swallow unexpected helper failures.
+      }
+    }
     return this.headlessOp('manage_resource', args, a => ({
       projectPath: a.projectPath,
       params: { resourcePath: a.resourcePath, action: a.action, ...(a.properties ? { properties: a.properties } : {}) },

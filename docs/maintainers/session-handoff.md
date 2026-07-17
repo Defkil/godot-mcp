@@ -482,15 +482,167 @@ be rerun on the final committed state.
    the takeover runner.
 8. Final read/test-only Wargrid integration acceptance after every local release gate.
 
+## Current package — asset import prerequisite (#103)
+
+The previous package closed the `manage_autoloads` injection gate (#9).
+The handoff's next-priority items all require a Godot binary on the
+takeover runner (the GUT headless test runner, real-Godot round-trip
+regressions, etc.) that is not present here. Instead, this package closes
+a real release-readiness defect on `Coding-Solo#103` — callers can hand
+`load_sprite` / `create_resource` / `manage_resource` an asset path
+whose matching Godot 4.4+ `.import` sidecar has never been generated.
+The GDScript side then prints a noisy import warning, falls into the
+`var texture = load(...) → null` branch, and silently renders nothing.
+The defect started as a UX report but it is also a release-readiness
+issue because every tool that loads a binary asset has the same failure
+mode.
+
+The package is one new helper + three handler edits + one test file +
+one inventory row update:
+
+- **`src/godot/asset-import-state.ts`** (new) — pure side-effect-free
+  helper. `detectAssetImportState(projectRoot, relativePath, options)`
+  returns a typed `AssetImportProbe` whose `state` is one of
+  `'imported' | 'missing-sidecar' | 'not-an-asset' | 'missing-source'`
+  and whose `diagnostic` names the exact project-root path plus the
+  Godot CLI command needed to import the sidecar
+  (`godot --headless --path <project> --editor --quit --import`).
+  Resolution goes through `node:path.resolve` so Windows paths work
+  correctly (the earlier posix-only stub mis-resolved `C:\…` paths and
+  was replaced). The exhaustive allowlist covers the union of importer
+  extensions Godot ships in `editor/import/` (texture, model, audio,
+  pack); hand-authored extensions (`.gd`, `.cs`, `.tres`, `.tscn`,
+  `.uid`) are reported as `not-an-asset` so the helper never blocks
+  legitimate non-asset calls. A complementary `resolveAssetImportRequirement`
+  exposes the same remediation string for callers that already have
+  their own error envelope shape.
+
+- **`src/server.ts`** — three focused edits in `handleLoadSprite`,
+  `handleCreateResource`, and the `load` action of `handleManageResource`.
+  Each edit runs the probe BEFORE `executeOperation` is reached and
+  returns the typed diagnostic as a `createErrorResponse`. `manage_resource`
+  is gated only on `load` so callers can still `create` or `delete` raw
+  asset files that have not yet been imported. The diff is 38 insertions,
+  4 deletions across the three handlers plus the import line.
+
+- **`tests/asset-import-prerequisite.test.ts`** (new, 14 tests) —
+  exercises the real `GodotServer` + `PathPolicy` + `CapabilityPolicy`
+  + MCP `tools/call` dispatch with a stubbed `executeOperation`. The 14
+  tests cover:
+
+  1. `detectAssetImportState` returns `'imported'` when the sidecar is
+     present (parent dir auto-created via the helper).
+  2. `'missing-sidecar'` when the asset exists without its sidecar.
+  3. `'not-an-asset'` for `.gd` (hand-authored script).
+  4. Rejects `../etc/passwd` as a path-traversal attempt.
+  5. Rejects a Windows-absolute path with a `relative` typed error.
+  6. `'missing-source'` when neither the asset nor the sidecar exists.
+  7. `resolveAssetImportRequirement` names the project root and the
+     `--import` flag in the remediation string.
+  8. `handleLoadSprite` rejects a PNG with no `.import` sidecar and
+     never calls `executeOperation`.
+  9. `handleLoadSprite` forwards a PNG with a sidecar to the runner.
+  10. `handleLoadSprite` passes a `.gd` through the gate.
+  11. `handleCreateResource` rejects a PNG resource without a sidecar
+      and never calls the runner.
+  12. `handleCreateResource` passes a `.tres` resource through the gate.
+  13. `handleManageResource` rejects the `load` action on a PNG without
+      a sidecar and never calls the runner.
+  14. `handleManageResource` does NOT block `create` / `delete` actions.
+
+- **`docs/maintainers/issue-inventory.md`** — row for `#103` moves
+  from `open` to `partial` with the full wire-level regression summary.
+
+The package:
+
+- does **not** modify `src/scripts/godot_operations.gd`, the tool
+  registry, the capability policy, the request limiter, the operation
+  runner, the BridgeClient, or any other handler;
+- preserves all 158 legacy tool contracts, every schema, every handler,
+  the 5 closed-list profiles, the package identity, the path policy,
+  the runtime bridge, and the MIT attribution;
+- does not push, publish, create a PR/release, upload a package, write
+  `docs/maintainers/release-candidate.md`, or send the candidate-ready
+  notification.
+
+Source evidence:
+
+- `src/godot/asset-import-state.ts:37-56` is the import-eligible
+  extension allowlist.
+- `src/server.ts:4454-4547` (`handleLoadSprite`) is gated by the probe.
+- `src/server.ts:5224-5248` (`handleCreateResource`) is gated by the probe.
+- `src/server.ts:6555-6575` (`handleManageResource`) gates only the
+  `load` action.
+- `tests/asset-import-prerequisite.test.ts` is the only new test file.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/asset-import-prerequisite.test.ts`: 1 file, 14 tests passed.
+- `npm test`: 34 files, 693 tests passed (was 679 before this package).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0).
+
+Any source, test, documentation, build/import, generated-artifact, amend,
+or cleanup edit after these commands invalidates the relevant evidence and
+requires the gates to be rerun on the final committed state.
+
+## Review state
+
+- The capability-policy package through `37facdf` has an independent
+  NeuralWatt `VERDICT | ACCEPT` with unchanged HEAD/status fingerprints.
+- The network-classification package `79b1d4d` also has an independent
+  NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The round-trip contract package `cbfe594`, the tween-bridge package
+  `2ef0b1a`, the physics-frame `game_wait` package `aff7ca1`, the C# /
+  .NET gate package `ec07f4b`, and the autoload-injection package
+  `6d76606` are each a focused test file (or test file + minimal
+  handler edit) and do not require an independent NeuralWatt dispatch.
+- The asset-import-prerequisite package (this package) is a single
+  test file plus a small pure helper plus three small handler edits;
+  it follows the same minimal-handoff pattern as the autoload
+  injection gate and does not require an independent NeuralWatt
+  dispatch.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.
+
+## Open inventory priorities
+
+1. Generic headless Godot test runner with GUT adapter (#29).
+2. Real-Godot verification of the `attach_script` C# / .NET round-trip
+   (`tests/attach-script-dotnet-gate.test.ts`) — needs a Godot binary
+   on the takeover runner that can build a .NET project and exercise
+   `set_script` on a C# script.
+3. Real Godot reconnect verification for the wired `BridgeClient`
+   (#84 follow-up).
+4. Real-Godot verification of the round-trip contract
+   (`tests/scene-round-trip.test.ts`) — needs a Godot binary on the
+   takeover runner.
+5. Real-Godot verification of the tween-vector regression
+   (`tests/tween-vector-bridge.test.ts`) — needs a Godot binary on
+   the takeover runner.
+6. Real-Godot verification of the physics-frame `game_wait` regression
+   (`tests/game-wait-frame-bridge.test.ts`) — needs a Godot binary on
+   the takeover runner.
+7. Real-Godot verification of the asset import prerequisite
+   (`tests/asset-import-prerequisite.test.ts`) — needs a Godot binary
+   that can resolve a PNG through the editor's import-on-open pipeline.
+8. Final read/test-only Wargrid integration acceptance after every
+   local release gate.
+
 ## Next safe action
 
-The `attach_script` C# / .NET gate package (#114) is closed at the typed
-error boundary; the next safe action remains the generic headless Godot
-test runner with GUT adapter (#29), which unblocks the real-Godot
-verification lanes for the round-trip, tween, physics-frame, and the
-new C# round-trip regressions at once. Begin with repository evidence
-and a focused failing behavioral test; preserve the five closed-list
-profiles, all 158 tool contracts, and the three limiter knobs. Do not
+The asset-import-prerequisite gate (#103) is closed at the typed error
+boundary for every binary-asset code path. The next safe action remains
+the generic headless Godot test runner with GUT adapter (#29), which
+unblocks the real-Godot verification lanes for the round-trip, tween,
+physics-frame, C# / .NET, and asset-import regressions at once. Begin
+with repository evidence and a focused failing behavioral test;
+preserve the five closed-list profiles, all 158 tool contracts, the
+three limiter knobs, and the new import-prerequisite helper. Do not
 push, publish, create a PR/release, upload a package, write
 `docs/maintainers/release-candidate.md`, or send the candidate-ready
 notification.
