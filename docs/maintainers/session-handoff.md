@@ -1,10 +1,10 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-17
+- Timestamp: 2026-07-17 (tick T17)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/senior-takeover`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: `fix: gate manage_ci_pipeline and manage_docker_export against template injection` (the new sibling-gate package, fully described in the "Current package — manage_ci_pipeline / manage_docker_export injection gates" section below; focused tests 17/17 green, full canonical gates green).
+- Current local package: `feat: gate core file I/O handlers with canonical PathPolicy contract` (the new defense-in-depth package, fully described in the "Current package — core file I/O defense-in-depth gate" section below; focused tests 16/16 green, full canonical gates green).
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `d00c4451cfd9a8443f12f70ee83814c476a73c63`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
@@ -1368,6 +1368,202 @@ that every other bounded test file in this stack is wire-level
 contract only. Without a Godot binary on the takeover runner, this
 package stays out of scope for the immediate worktree; land it
 when the GUT headless test runner (#29) is in place. Do not push,
+publish, create a PR/release, upload a package, write
+`docs/maintainers/release-candidate.md`, or send the
+candidate-ready notification.
+
+## Current package — core file I/O defense-in-depth gate
+
+The previous package closed the `manage_ci_pipeline` /
+`manage_docker_export` template-injection gate (head commit at job
+creation, `9eef5cd8`). The handoff's next-priority item was real-Godot
+verification of that template round-trip, but the Godot binary is not
+available on this runner. Instead, this package closes a real
+defense-in-depth gap in the five lowest-level file-I/O handlers
+(`handleReadFile`, `handleWriteFile`, `handleDeleteFile`,
+`handleCreateDirectory`, `handleRenameFile`).
+
+The request-boundary `assertSafeToolPaths` guard already rejects every
+canonical member path that would escape the configured `PathPolicy`
+roots BEFORE the handler is called, so the runtime is not exposed
+to a fresh escape. But the handler bodies themselves historically
+used only the lexical `validatePath` boundary on both `projectPath`
+and the member path, then `join(args.projectPath, args.<member>)`-ed
+the user-supplied values into `readFileSync` / `writeFileSync` /
+`unlinkSync` / `mkdirSync` / `renameSync`. The lexical boundary
+rejects empty / null-byte strings and rejects paths that start with
+`..`, but it does NOT enforce the configured `PathPolicy` allowed-roots
+list — so a future refactor that bypassed the boundary guard (e.g.,
+invoking a handler outside the standard `CallToolRequest` path, or
+a future internal admin tool that routed directly to the handler)
+would have lost the canonical-root protection.
+
+The package is one new test file + five focused handler edits +
+one inventory row update:
+
+- **`tests/core-file-io-injection.test.ts`** (new, 16 tests) —
+  invokes the private handler methods directly via
+  `(server as any).handleXxx(args)` (bypassing `tools/call` and the
+  request-boundary guard) so the test proves the gate lives in the
+  handler body itself, not only at the boundary. The 16 tests cover:
+
+  1. `read_file` rejects a `projectPath` outside the configured
+     allowed roots with the canonical-root envelope
+     (`Project path is outside the configured allowed roots`).
+  2. `read_file` rejects a `filePath` containing a `..` traversal
+     with `Invalid filePath: ... traversal outside the project root`.
+  3. `read_file` rejects an absolute `filePath` (`C:\etc\passwd` on
+     Windows, `/etc/passwd` elsewhere) via `resolveProjectMember`.
+  4. `write_file` rejects a `projectPath` outside the configured
+     allowed roots with the canonical-root envelope.
+  5. `write_file` rejects a `filePath` containing a `..` traversal.
+  6. `write_file` leaves `project.godot` byte-identical after a
+     rejected write — proves no half-written artifact.
+  7. `delete_file` rejects a `projectPath` outside the configured
+     allowed roots.
+  8. `delete_file` rejects a `filePath` containing a `..` traversal.
+  9. `create_directory` rejects a `projectPath` outside the configured
+     allowed roots.
+  10. `create_directory` rejects a `directoryPath` containing a `..`
+      traversal.
+  11. `rename_file` rejects a `projectPath` outside the configured
+      allowed roots.
+  12. `rename_file` rejects a `filePath` containing a `..` traversal.
+  13. `rename_file` rejects a `newPath` containing a `..` traversal.
+  14. `read_file` accepts a canonical relative `filePath` and returns
+      the file content (proves the happy path still works).
+  15. `write_file` accepts a canonical relative `filePath` and writes
+      the file.
+  16. `rename_file` accepts canonical relative `filePath` and
+      `newPath` and renames the file.
+
+  The fixture is a temporary Godot project under the OS temp
+  directory, removed in `afterEach`. Each test uses a fresh
+  `PathPolicy([root])` + `CapabilityPolicy('unsafe-full')` so the
+  handler body's gate runs against the configured-roots contract,
+  not against the legacy lexical `validatePath` fallback.
+
+- **`src/server.ts` :: `handleReadFile`, `handleWriteFile`,
+  `handleDeleteFile`, `handleCreateDirectory`, `handleRenameFile`** —
+  each handler now:
+
+  - Resolves the project root through
+    `this.pathPolicy.assertProject(args.projectPath)`, replacing the
+    lexical `validatePath` boundary on `projectPath`.
+  - Resolves the member path (`filePath`, `newPath`, or
+    `directoryPath`) through
+    `this.pathPolicy.resolveProjectMember(projectRoot, args.<member>)`,
+    matching the `manage_shader` / `set_main_scene` /
+    `manage_translations` gate pattern.
+  - Returns the typed `isError: true` envelope BEFORE any filesystem
+    call when either resolution throws.
+  - Reads the canonical project root from the resolved `projectRoot`
+    rather than from `args.projectPath`, so a symlinked project root
+    is honored consistently with the request-boundary guard.
+
+  The diff is 100 insertions, 24 deletions across the five handlers.
+
+- **`docs/maintainers/issue-inventory.md`** — added a new item 19
+  under "Additional defects found during takeover" describing the
+  sibling-gate package, the wire-level regression summary, the
+  targeted handlers, and the `(server as any).handleXxx(args)` direct
+  invocation pattern.
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every
+  handler, the 5 closed-list profiles, the package identity, the
+  path policy, the runtime bridge, and the MIT attribution;
+- does **not** modify `src/scripts/godot_operations.gd`,
+  `src/scripts/mcp_interaction_server.gd`, the tool registry, the
+  capability policy, the request limiter, the operation runner,
+  the BridgeClient, the upstream `bridge-installer.ts`, the
+  sibling `manage_*` gates, or any other handler;
+- the only documented behavior change is the typed
+  `Project path is outside the configured allowed roots` envelope
+  for a `projectPath` outside the configured `PathPolicy` roots;
+  every previously-permitted input still works, every previously-
+  rejected input still fails (just with a clearer envelope).
+
+Source evidence:
+
+- `src/server.ts:5257-5330` (`handleReadFile`) is gated by the
+  canonical-root `PathPolicy.assertProject` and the member-path
+  `PathPolicy.resolveProjectMember`.
+- `src/server.ts:5332-5400` (`handleWriteFile`) is gated the same
+  way; rejected writes leave `project.godot` byte-identical.
+- `src/server.ts:5402-5470` (`handleDeleteFile`) is gated the same
+  way.
+- `src/server.ts:5472-5540` (`handleCreateDirectory`) is gated the
+  same way.
+- `src/server.ts:6605-6650` (`handleRenameFile`) is gated the same
+  way for both `filePath` and `newPath`.
+- `tests/core-file-io-injection.test.ts` is the only new test file
+  (16 tests).
+- `docs/maintainers/issue-inventory.md` item 19 is the only docs
+  edit.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/core-file-io-injection.test.ts`: 1 file,
+  16 tests passed (RED 5/16 confirmed before the fix; GREEN 16/16
+  after).
+- `npm test`: 41 files, 768 tests passed (was 752 before this
+  package; +16 new tests).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0).
+- `npm pack --dry-run`: tarball name `defkil-godot-mcp-4.0.0.tgz`,
+  identity intact (`@defkil/godot-mcp@4.0.0`).
+
+Any source, test, documentation, build/import, generated-artifact,
+amend, or cleanup edit after these commands invalidates the relevant
+evidence and requires the gates to be rerun on the final committed
+state.
+
+## Review state
+
+- The capability-policy package through `37facdf` has an independent
+  NeuralWatt `VERDICT | ACCEPT` with unchanged HEAD/status
+  fingerprints.
+- The network-classification package `79b1d4d` also has an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The round-trip contract package `cbfe594`, the tween-bridge
+  package `2ef0b1a`, the physics-frame `game_wait` package
+  `aff7ca1`, the C# / .NET gate package `ec07f4b`, the autoload
+  injection package `6d76606`, the asset-import-prerequisite
+  package (`88dda1e` / `76c9207`), the Defkil fork package identity
+  rebase `a1cae8b`, the manage-layers / manage-plugins
+  sibling-gate package `3874d81`, the set-main-scene /
+  manage-translations sibling-gate package `6407446`, the
+  manage_shader sibling-gate package `9cd5ac4`, and the
+  manage_ci_pipeline / manage_docker_export sibling-gate package
+  `9eef5cd` are each a focused test file (or test file + minimal
+  handler edit) and do not require an independent NeuralWatt
+  dispatch.
+- The core-file-IO defense-in-depth package (this package) is one
+  new test file plus five focused handler edits. It mirrors the
+  same minimal-handoff pattern as items 14-18 and does not require
+  an independent NeuralWatt dispatch.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.
+
+## Next safe action
+
+The next bounded package is to extend the same canonical-root
+gate to the remaining file-mutation handlers that still inline a
+lexical `validatePath` boundary: `handleCreateScript`,
+`handleValidateScript`, `handleValidateScripts`,
+`handleManageThemeResource`, `handleManageSceneSignals`,
+`handleManageSceneStructure`, `handleGetUid`, `handleCreateScene`,
+`handleAddNode`, `handleSaveScene`, `handleExportMeshLibrary`,
+`handleModifySceneNode`, `handleReadScene`. Each handler can be
+ported one at a time to `PathPolicy.assertProject` +
+`PathPolicy.resolveProjectMember`, with a focused wire-level test
+mirroring `tests/core-file-io-injection.test.ts`. Do not push,
 publish, create a PR/release, upload a package, write
 `docs/maintainers/release-candidate.md`, or send the
 candidate-ready notification.

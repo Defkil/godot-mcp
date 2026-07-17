@@ -103,3 +103,30 @@ The two immediate-upstream issues omitted from the focused regression table are 
 Everything in this inventory is local preparation. No branch, commit, package,
 container, release, issue comment, issue closure or pull request is published until
 Oliver explicitly approves the exact reviewed candidate.
+
+19. The five lowest-level file-I/O handlers (`handleReadFile`, `handleWriteFile`,
+    `handleDeleteFile`, `handleCreateDirectory`, `handleRenameFile`) historically
+    used only the lexical `validatePath` boundary on both `projectPath` and the
+    member path (`filePath`, `newPath`, `directoryPath`), then `join(args.projectPath,
+    args.<member>)`-ed the user-supplied values into `readFileSync` / `writeFileSync`
+    / `unlinkSync` / `mkdirSync` / `renameSync`. While the request-boundary
+    `assertSafeToolPaths` already rejects every canonical member path that would
+    escape the configured `PathPolicy` roots BEFORE the handler is called, the
+    handler bodies themselves did not formally adopt the canonical-root contract.
+    If a future refactor bypassed the boundary guard (e.g., by invoking a handler
+    outside the standard `CallToolRequest` path, or by a future internal admin
+    tool that routed directly to the handler), the lexical `validatePath` was
+    too weak to enforce the configured allowed-roots list. The takeover now
+    replaces the lexical `validatePath` boundary on all five handlers with the
+    same `PathPolicy.assertProject(args.projectPath)` + `PathPolicy.resolveProjectMember
+    (projectRoot, args.<member>)` pattern the sibling `manage_shader` /
+    `set_main_scene` / `manage_translations` gates already use, so the
+    canonical-root contract is enforced in the handler body itself. Wire-level
+    coverage in `tests/core-file-io-injection.test.ts` (16 tests): 5 "outside
+    allowed roots" denials (one per handler), 4 `..` traversal denials, 1
+    absolute-path denial, 1 byte-identical rollback assertion after a rejected
+    `write_file`, and 3 benign acceptance paths (`read_file`, `write_file`,
+    `rename_file`) that confirm the canonical happy path still works. The tests
+    invoke the private handler methods directly via `(server as any).handleXxx(args)`
+    (bypassing `tools/call`) to prove the gate lives in the handler body itself,
+    not only in the request-boundary guard.
