@@ -5226,8 +5226,24 @@ export class GodotServer {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.resourceType || !args.resourcePath)
       return createErrorResponse('projectPath, resourceType, and resourcePath are required.');
-    if (!validatePath(args.projectPath) || !validatePath(args.resourcePath))
-      return createErrorResponse('Invalid path.');
+    // Resolve the project root through the request-boundary PathPolicy
+    // (replaces lexical `validatePath` with canonical-root enforcement,
+    // matching the sibling `core_file_io` / `manage_shader` / `set_main_scene` gates).
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+    }
+    // Resolve resourcePath through the same PathPolicy that gates the
+    // sibling handlers, so `..` segments and absolute-path bypasses
+    // cannot escape the project root even if the lexical `validatePath`
+    // boundary were ever removed.
+    try {
+      this.pathPolicy.resolveProjectMember(projectRoot, args.resourcePath);
+    } catch (error: any) {
+      return createErrorResponse(`Invalid resourcePath: ${error?.message ?? 'rejected by path policy.'}`);
+    }
     // Godot 4.4+ requires a generated `.import` sidecar for binary assets
     // before the create_resource operation can register a typed Resource.
     // Detect the missing-sidecar state up-front and surface a typed
@@ -6646,8 +6662,24 @@ export class GodotServer {
   private async handleManageResource(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.resourcePath || !args.action) return createErrorResponse('projectPath, resourcePath, and action are required.');
-    if (!validatePath(args.projectPath) || !validatePath(args.resourcePath))
-      return createErrorResponse('Invalid path.');
+    // Resolve the project root through the request-boundary PathPolicy
+    // (replaces lexical `validatePath` with canonical-root enforcement,
+    // matching the sibling `core_file_io` / `manage_shader` / `set_main_scene` gates).
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+    }
+    // Resolve resourcePath through the same PathPolicy that gates the
+    // sibling handlers, so `..` segments and absolute-path bypasses
+    // cannot escape the project root even if the lexical `validatePath`
+    // boundary were ever removed.
+    try {
+      this.pathPolicy.resolveProjectMember(projectRoot, args.resourcePath);
+    } catch (error: any) {
+      return createErrorResponse(`Invalid resourcePath: ${error?.message ?? 'rejected by path policy.'}`);
+    }
     // Only the `load` action resolves the asset through Godot's resource
     // loader; `create`/`delete`/`save` write files directly and do not
     // depend on a generated `.import` sidecar. Detect the missing-sidecar
@@ -6717,11 +6749,28 @@ export class GodotServer {
   private async handleValidateScript(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.scriptPath) return createErrorResponse('projectPath and scriptPath are required.');
-    if (!validatePath(args.projectPath) || !validatePath(args.scriptPath)) return createErrorResponse('Invalid path.');
+    // Resolve the project root through the request-boundary PathPolicy
+    // (replaces lexical `validatePath` with canonical-root enforcement,
+    // matching the sibling `core_file_io` / `manage_shader` / `set_main_scene` gates).
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+    }
+    // Resolve scriptPath through the same PathPolicy that gates the
+    // sibling handlers, so `..` segments and absolute-path bypasses
+    // cannot escape the project root even if the lexical `validatePath`
+    // boundary were ever removed.
+    let scriptFull: string;
+    try {
+      scriptFull = this.pathPolicy.resolveProjectMember(projectRoot, args.scriptPath);
+    } catch (error: any) {
+      return createErrorResponse(`Invalid scriptPath: ${error?.message ?? 'rejected by path policy.'}`);
+    }
     if (!/\.gd$/i.test(args.scriptPath)) return createErrorResponse('validate_script only checks GDScript (.gd) files.');
-    const projectFile = join(args.projectPath, 'project.godot');
-    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
-    const scriptFull = join(args.projectPath, args.scriptPath);
+    const projectFile = join(projectRoot, 'project.godot');
+    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${projectRoot}`);
     if (!existsSync(scriptFull)) return createErrorResponse(`Script does not exist: ${args.scriptPath}`);
     if (!this.godotPath) {
       await this.detectGodotPath();
@@ -6786,9 +6835,17 @@ export class GodotServer {
   private async handleValidateScripts(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath) return createErrorResponse('projectPath is required.');
-    if (!validatePath(args.projectPath)) return createErrorResponse('Invalid path.');
-    const projectFile = join(args.projectPath, 'project.godot');
-    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
+    // Resolve the project root through the request-boundary PathPolicy
+    // (replaces lexical `validatePath` with canonical-root enforcement,
+    // matching the sibling `core_file_io` / `manage_shader` / `set_main_scene` gates).
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+    }
+    const projectFile = join(projectRoot, 'project.godot');
+    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${projectRoot}`);
     if (!this.godotPath) {
       await this.detectGodotPath();
       if (!this.godotPath) return createErrorResponse('Could not find a valid Godot executable path');
@@ -6802,12 +6859,12 @@ export class GodotServer {
       candidates = args.scriptPaths.map((p: any) => String(p));
     } else if (args.scope === undefined || args.scope === 'changed') {
       scope = 'changed';
-      const changed = await this.listChangedGdFiles(args.projectPath);
+      const changed = await this.listChangedGdFiles(projectRoot);
       if (changed.error) return createErrorResponse(changed.error);
       candidates = changed.files!;
     } else if (args.scope === 'all') {
       scope = 'all';
-      candidates = this.listAllGdFiles(args.projectPath);
+      candidates = this.listAllGdFiles(projectRoot);
     } else {
       return createErrorResponse(`Invalid scope "${args.scope}". Use "changed" or "all", or pass scriptPaths.`);
     }
@@ -6820,7 +6877,7 @@ export class GodotServer {
         if (explicit) results.push({ scriptPath: rel, checked: false, error: 'Not a valid .gd path' });
         continue;
       }
-      if (!existsSync(join(args.projectPath, rel))) {
+      if (!existsSync(join(projectRoot, rel))) {
         if (explicit) results.push({ scriptPath: rel, checked: false, error: 'Script does not exist' });
         continue;
       }
@@ -6832,7 +6889,7 @@ export class GodotServer {
       return createErrorResponse(`Too many scripts to validate (${toCheck.length} > ${MAX_BATCH}). Narrow the scope or pass an explicit scriptPaths list.`);
 
     for (const rel of toCheck) {
-      const check = await this.runGdScriptCheck(args.projectPath, join(args.projectPath, rel));
+      const check = await this.runGdScriptCheck(projectRoot, join(projectRoot, rel));
       if (!check.completed) {
         results.push({ scriptPath: rel, checked: false, error: check.error });
       } else {
@@ -6860,11 +6917,28 @@ export class GodotServer {
   private async handleCreateScript(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.scriptPath) return createErrorResponse('projectPath and scriptPath are required.');
-    if (!validatePath(args.projectPath) || !validatePath(args.scriptPath)) return createErrorResponse('Invalid path.');
-    const projectFile = join(args.projectPath, 'project.godot');
-    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
+    // Resolve the project root through the request-boundary PathPolicy
+    // (replaces lexical `validatePath` with canonical-root enforcement,
+    // matching the sibling `core_file_io` / `manage_shader` / `set_main_scene` gates).
+    let projectRoot: string;
     try {
-      const fullPath = join(args.projectPath, args.scriptPath);
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+    }
+    // Resolve scriptPath through the same PathPolicy that gates the
+    // sibling handlers, so `..` segments and absolute-path bypasses
+    // cannot escape the project root even if the lexical `validatePath`
+    // boundary were ever removed.
+    let fullPath: string;
+    try {
+      fullPath = this.pathPolicy.resolveProjectMember(projectRoot, args.scriptPath);
+    } catch (error: any) {
+      return createErrorResponse(`Invalid scriptPath: ${error?.message ?? 'rejected by path policy.'}`);
+    }
+    const projectFile = join(projectRoot, 'project.godot');
+    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${projectRoot}`);
+    try {
       const dir = dirname(fullPath);
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       let source = args.source;

@@ -130,3 +130,36 @@ Oliver explicitly approves the exact reviewed candidate.
     invoke the private handler methods directly via `(server as any).handleXxx(args)`
     (bypassing `tools/call`) to prove the gate lives in the handler body itself,
     not only in the request-boundary guard.
+
+20. The same defense-in-depth gate class persisted in five script and resource
+    handlers: `handleValidateScript` and `handleValidateScripts` resolved
+    `projectPath` and `scriptPath` through lexical `validatePath` and then
+    `join(args.projectPath, ...)`-ed the result into `existsSync`/`runGdScriptCheck`
+    (validation), `handleCreateScript` wrote `args.source` to `join(args.projectPath,
+    args.scriptPath)` after `mkdirSync(dirname, { recursive: true })`, and
+    `handleCreateResource` and `handleManageResource` resolved `resourcePath`
+    through lexical `validatePath` before dispatching to `headlessOp` with the
+    raw `args.resourcePath` (the asset-import prerequisite probe runs inside
+    `try/catch`, so a `..`-bearing resourcePath that escaped the project root
+    would silently bypass the request-boundary gate if it was ever invoked
+    outside the standard `CallToolRequest` path). Each handler now resolves
+    `projectRoot` through `this.pathPolicy.assertProject(args.projectPath)` and
+    the member path (`scriptPath` / `resourcePath`) through
+    `this.pathPolicy.resolveProjectMember(projectRoot, args.<member>)`, returning
+    a typed `isError: true` envelope BEFORE any filesystem call when either
+    resolution throws. `handleValidateScripts` additionally propagates the
+    resolved `projectRoot` through `listChangedGdFiles`, `listAllGdFiles`, and
+    the inner `runGdScriptCheck`/`join` calls so a symlinked project root is
+    honored consistently with the request-boundary guard. Wire-level coverage in
+    `tests/script-resource-handler-injection.test.ts` (10 tests): 4 "outside
+    allowed roots" denials (`validate_script`, `validate_scripts`, `create_script`,
+    `create_resource`, `manage_resource`), 4 `..` traversal denials
+    (`validate_script`, `create_script`, `create_resource`, `manage_resource`),
+    1 byte-identical rollback assertion after a rejected `create_script` write,
+    and 1 benign-acceptance `validate_scripts` path. `handleCreateCsharpScript`
+    carries the same lexical-`validatePath` boundary but is intentionally out of
+    scope for this package because it is gated downstream by the
+    script-kind/project-kind gate introduced for [Coding-Solo#114]; the sibling
+    migration is filed as the next-follow-up release gate. The handler-body gate
+    mirrors item 19 and matches the sibling `manage_shader` /
+    `set_main_scene` / `manage_translations` / `core_file_io` pattern.
