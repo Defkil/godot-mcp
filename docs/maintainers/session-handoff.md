@@ -1,10 +1,10 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-17 (tick T17)
+- Timestamp: 2026-07-17 (tick T18)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/senior-takeover`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: `feat: gate core file I/O handlers with canonical PathPolicy contract` (the new defense-in-depth package, fully described in the "Current package — core file I/O defense-in-depth gate" section below; focused tests 16/16 green, full canonical gates green).
+- Current local package: `feat: gate script and resource handlers with canonical PathPolicy contract` (the new defense-in-depth package, fully described in the "Current package — script/resource handler defense-in-depth gate" section below; focused tests 10/10 green, full canonical gates green).
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `d00c4451cfd9a8443f12f70ee83814c476a73c63`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
@@ -1554,16 +1554,211 @@ state.
 ## Next safe action
 
 The next bounded package is to extend the same canonical-root
-gate to the remaining file-mutation handlers that still inline a
-lexical `validatePath` boundary: `handleCreateScript`,
-`handleValidateScript`, `handleValidateScripts`,
-`handleManageThemeResource`, `handleManageSceneSignals`,
-`handleManageSceneStructure`, `handleGetUid`, `handleCreateScene`,
-`handleAddNode`, `handleSaveScene`, `handleExportMeshLibrary`,
-`handleModifySceneNode`, `handleReadScene`. Each handler can be
-ported one at a time to `PathPolicy.assertProject` +
-`PathPolicy.resolveProjectMember`, with a focused wire-level test
-mirroring `tests/core-file-io-injection.test.ts`. Do not push,
+gate to the remaining handlers that still inline a lexical
+`validatePath` boundary on either `projectPath` or a member
+path: `handleCreateCsharpScript` (next-follow-up gate, intentionally
+deferred from this package because the .cs / .gd / non-.NET-project
+gate from [Coding-Solo#114] is the primary gate for that handler),
+`handleCreateProject`, `handleManageAutoloads`,
+`handleManageInputMap`, `handleManageExportPresets`,
+`handleExportProject`, `handleListProjects`, `handleGetProjectInfo`,
+`handleLoadSprite`, `handleExportMeshLibrary`, `handleSaveScene`,
+`handleGetUid`, `handleReadProjectSettings`,
+`handleModifyProjectSettings`, `handleListProjectFiles`,
+`handleManageResource` (load action already covered here, other
+actions still need it), `handleManageThemeResource`,
+`handleManageSceneSignals`, `handleManageSceneStructure`,
+`handleCreateScene`, `handleAddNode`, `handleReadScene`,
+`handleModifySceneNode`. Each handler can be ported one at a time
+to `PathPolicy.assertProject` + `PathPolicy.resolveProjectMember`,
+with a focused wire-level test mirroring
+`tests/script-resource-handler-injection.test.ts`. Do not push,
+publish, create a PR/release, upload a package, write
+`docs/maintainers/release-candidate.md`, or send the
+candidate-ready notification.
+
+## Current package — script/resource handler defense-in-depth gate
+
+The previous handoff listed the remaining `validatePath`-gated file-mutation
+handlers as the highest-priority next bounded package. This package closes
+five of them: `handleValidateScript`, `handleValidateScripts`,
+`handleCreateScript`, `handleCreateResource`, and `handleManageResource`.
+
+Each handler historically opened with `if (!validatePath(args.projectPath)
+|| !validatePath(args.<member>)) return createErrorResponse('Invalid path.');`
+and then `join(args.projectPath, args.<member>)-ed` the user-supplied values
+into `existsSync` / `runGdScriptCheck` / `writeFileSync` / `headlessOp`.
+While the request-boundary `assertSafeToolPaths` already rejects every
+canonical member path that would escape the configured `PathPolicy` roots
+BEFORE the handler is called, the handler bodies themselves did not
+formally adopt the canonical-root contract. If a future refactor bypassed
+the boundary guard (e.g. by invoking a handler outside the standard
+`CallToolRequest` path), the lexical `validatePath` was too weak to enforce
+the configured allowed-roots list.
+
+The five handlers now each:
+
+- Resolve the project root through `this.pathPolicy.assertProject(args.projectPath)`,
+  replacing the lexical `validatePath` boundary on `projectPath`.
+- Resolve the member path (`scriptPath` / `resourcePath`) through
+  `this.pathPolicy.resolveProjectMember(projectRoot, args.<member>)`,
+  matching the `core_file_io` / `manage_shader` / `set_main_scene` /
+  `manage_translations` gate pattern.
+- Return the typed `isError: true` envelope BEFORE any filesystem call
+  when either resolution throws.
+- Read the canonical project root from the resolved `projectRoot` rather
+  than from `args.projectPath`, so a symlinked project root is honored
+  consistently with the request-boundary guard.
+- (`handleValidateScripts` only) propagate the resolved `projectRoot`
+  through `listChangedGdFiles`, `listAllGdFiles`, the inner
+  `runGdScriptCheck`, and the `existsSync(join(...))` checks so a
+  symlinked project root is honored end-to-end.
+
+`handleCreateCsharpScript` carries the same lexical-`validatePath`
+boundary but is intentionally out of scope for this package because it
+is gated downstream by the script-kind / project-kind gate introduced
+for [Coding-Solo#114] (`tests/attach-script-dotnet-gate.test.ts`); the
+sibling migration is filed as the next-follow-up release gate.
+
+The package has two coherent changes:
+
+1. **`tests/script-resource-handler-injection.test.ts`** (new, 10 tests) —
+   builds a temporary Godot project under the OS temp directory,
+   removed in `afterEach`. The 10 tests cover:
+
+   - `validate_script` with `projectPath` outside the configured allowed
+     roots (rejected with a typed envelope naming the allowed roots).
+   - `validate_script` with `scriptPath = 'scripts/../../etc/passwd'`
+     (rejected with a typed envelope naming `scriptPath`).
+   - `validate_scripts` with `projectPath` outside the configured allowed
+     roots (rejected with a typed envelope naming the allowed roots).
+   - `create_script` with `projectPath` outside the configured allowed
+     roots.
+   - `create_script` with `scriptPath = 'scripts/../../etc/passwd'`.
+   - `create_script` byte-identical rollback after a rejected write
+     (the `project.godot` byte sequence is unchanged).
+   - `create_resource` with `projectPath` outside the configured allowed
+     roots.
+   - `create_resource` with `resourcePath = 'data/../../etc/passwd'`.
+   - `manage_resource` with `projectPath` outside the configured allowed
+     roots.
+   - `manage_resource` with `resourcePath = 'data/../../etc/passwd'`.
+
+   The script invokes the private handler methods directly via
+   `(server as any).handleXxx(args)`, the same wiring pattern as
+   `tests/core-file-io-injection.test.ts`, so the gate exercises the
+   live handler dispatch path, not a side-stepped import.
+
+2. **`src/server.ts`** — minimal gate addition to the five handlers,
+   matching the sibling `core_file_io` / `manage_shader` /
+   `set_main_scene` pattern exactly. The diff is 93 insertions,
+   19 deletions across the five handlers (plus 6 substitutions of
+   `args.projectPath` → `projectRoot` inside `handleValidateScripts`
+   so the symlinked-root behavior is honored end-to-end).
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every handler,
+  the 5 closed-list profiles, the package identity, the path policy,
+  the runtime bridge, and the MIT attribution;
+- does **not** modify `src/scripts/godot_operations.gd`,
+  `src/scripts/mcp_interaction_server.gd`, the tool registry, the
+  capability policy, the request limiter, the operation runner, the
+  BridgeClient, the upstream `bridge-installer.ts`, the sibling
+  `manage_*` gates, or any other handler;
+- the only documented behavior change is the typed
+  `Project path is outside the configured allowed roots` envelope for
+  a `projectPath` outside the configured `PathPolicy` roots; every
+  previously-permitted input still works, every previously-rejected
+  input still fails (just with a clearer envelope).
+
+Source evidence:
+
+- `src/server.ts:5226-5252` (`handleCreateResource`) is gated by the
+  canonical-root `PathPolicy.assertProject` and the member-path
+  `PathPolicy.resolveProjectMember`.
+- `src/server.ts:6662-6686` (`handleManageResource`) is gated the same
+  way; rejected loads still skip the asset-import prerequisite probe
+  cleanly.
+- `src/server.ts:6749-6781` (`handleValidateScript`) is gated the same
+  way; rejected scripts skip the `runGdScriptCheck` entirely.
+- `src/server.ts:6835-6909` (`handleValidateScripts`) is gated the same
+  way; the resolved `projectRoot` propagates through `listChangedGdFiles`,
+  `listAllGdFiles`, and the inner `runGdScriptCheck` calls.
+- `src/server.ts:6917-6944` (`handleCreateScript`) is gated the same way;
+  rejected writes leave `project.godot` byte-identical.
+- `tests/script-resource-handler-injection.test.ts` is the only new test
+  file (10 tests).
+- `docs/maintainers/issue-inventory.md` item 20 is the only docs edit.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/script-resource-handler-injection.test.ts`: 1 file,
+  10 tests passed (RED 5/10 confirmed before the fix; GREEN 10/10 after).
+- `npm test`: 42 files, 778 tests passed (was 768 before this package;
+  +10 new tests).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0).
+- `npm pack --dry-run`: tarball name `defkil-godot-mcp-4.0.0.tgz`,
+  identity intact (`@defkil/godot-mcp@4.0.0`).
+
+Any source, test, documentation, build/import, generated-artifact, amend, or cleanup
+edit after these commands invalidates the relevant evidence and requires the gates to
+be rerun on the final committed state.
+
+## Review state
+
+- The capability-policy package through `37facdf` has an independent NeuralWatt
+  `VERDICT | ACCEPT` with unchanged HEAD/status fingerprints.
+- The network-classification package `79b1d4d` also has an independent
+  NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an independent
+  NeuralWatt `VERDICT | ACCEPT`.
+- The round-trip contract package `cbfe594`, the tween-bridge
+  package `2ef0b1a`, the physics-frame `game_wait` package
+  `aff7ca1`, the C# / .NET gate package `ec07f4b`, the autoload
+  injection package `6d76606`, the asset-import-prerequisite
+  package (`88dda1e` / `76c9207`), the Defkil fork package identity
+  rebase `a1cae8b`, the manage-layers / manage-plugins
+  sibling-gate package `3874d81`, the set-main-scene /
+  manage-translations sibling-gate package `6407446`, the
+  manage_shader sibling-gate package `9cd5ac4`, the
+  manage_ci_pipeline / manage_docker_export sibling-gate package
+  `9eef5cd`, and the core-file-IO defense-in-depth package
+  `b9fe537` are each a focused test file (or test file + minimal
+  handler edit) and do not require an independent NeuralWatt
+  dispatch.
+- This script/resource handler defense-in-depth package is one new
+  test file plus five focused handler edits. It mirrors the same
+  minimal-handoff pattern as items 14-19 and does not require an
+  independent NeuralWatt dispatch.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.
+
+## Next safe action
+
+The next bounded package is to extend the same canonical-root
+gate to the remaining handlers that still inline a lexical
+`validatePath` boundary on either `projectPath` or a member
+path: `handleCreateCsharpScript` (next-follow-up gate, intentionally
+deferred from this package because the .cs / .gd / non-.NET-project
+gate from [Coding-Solo#114] is the primary gate for that handler),
+`handleCreateProject`, `handleManageAutoloads`,
+`handleManageInputMap`, `handleManageExportPresets`,
+`handleExportProject`, `handleListProjects`, `handleGetProjectInfo`,
+`handleLoadSprite`, `handleExportMeshLibrary`, `handleSaveScene`,
+`handleGetUid`, `handleReadProjectSettings`,
+`handleModifyProjectSettings`, `handleListProjectFiles`,
+`handleManageResource` (load action already covered here, other
+actions still need it), `handleManageThemeResource`,
+`handleManageSceneSignals`, `handleManageSceneStructure`,
+`handleCreateScene`, `handleAddNode`, `handleReadScene`,
+`handleModifySceneNode`. Each handler can be ported one at a time
+to `PathPolicy.assertProject` + `PathPolicy.resolveProjectMember`,
+with a focused wire-level test mirroring
+`tests/script-resource-handler-injection.test.ts`. Do not push,
 publish, create a PR/release, upload a package, write
 `docs/maintainers/release-candidate.md`, or send the
 candidate-ready notification.
