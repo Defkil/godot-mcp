@@ -50,7 +50,8 @@ const IMPORT_ELIGIBLE_EXTENSIONS = new Set<string>([
   '.gif',
   '.aseprite',
   '.ase',
-  '.pck',
+  // `.pck` packs and `.json` data files are loaded directly by Godot APIs;
+  // they do not receive generated `<asset>.import` sidecars.
   '.glb',
   '.gltf',
   '.blend',
@@ -59,7 +60,6 @@ const IMPORT_ELIGIBLE_EXTENSIONS = new Set<string>([
   '.wav',
   '.ogg',
   '.mp3',
-  '.json', // when used as a JSON resource, not as a config script
 ]);
 
 /**
@@ -170,7 +170,7 @@ export function detectAssetImportState(
       sidecarPath,
       diagnostic:
         `Godot 4.4+ requires a generated \`.import\` sidecar for ${normalizedRelative}. ` +
-        `Run \`godot --headless --path "${absoluteProject}" --editor --quit --import\` ` +
+        `Run \`godot --headless --path ${quoteForShell(absoluteProject)} --editor --quit --import\` ` +
         `(or open the project in the Godot editor once) to create ${sidecarPath}, then retry.`,
     };
   }
@@ -182,6 +182,10 @@ export function detectAssetImportState(
     sidecarPath,
     diagnostic: `Asset ${normalizedRelative} is imported (sidecar ${sidecarPath} present).`,
   };
+}
+
+function quoteForShell(value: string): string {
+  return `"${value.replace(/"/g, '\\"')}"`;
 }
 
 /**
@@ -200,7 +204,7 @@ export function resolveAssetImportRequirement(
   }
   const normalized = relativePath.replace(/\\/g, '/');
   return (
-    `Run \`${godotBin} --headless --path "${projectRoot}" --editor --quit --import\` ` +
+    `Run \`${godotBin} --headless --path ${quoteForShell(projectRoot)} --editor --quit --import\` ` +
     `to generate the \`.import\` sidecar for ${normalized}, then retry the original command.`
   );
 }

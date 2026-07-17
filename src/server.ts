@@ -4504,15 +4504,17 @@ export class GodotServer {
       // instead of a silent `var texture = load(...) → null`. This is
       // the wire-level contract half of [Coding-Solo#103].
       try {
-        const probe = detectAssetImportState(args.projectPath, args.texturePath);
+        const probe = detectAssetImportState(args.projectPath, args.texturePath, {
+          pathPolicy: this.pathPolicy,
+        });
         if (probe.state === 'missing-sidecar') {
           return createErrorResponse(probe.diagnostic);
         }
       } catch (probeError: any) {
-        // Path-policy denials (absolute paths, traversal) flow through the
-        // existing `validatePath` gate above; this catch only absorbs
-        // unexpected helper failures so the load_sprite happy path is not
-        // taken down by a probe regression.
+        // Canonical path and allowed-root denials are enforced by the
+        // request-boundary `assertSafeToolPaths` guard before this handler;
+        // this catch only absorbs unexpected helper failures so the
+        // load_sprite happy path is not taken down by a probe regression.
       }
 
       // Prepare parameters for the operation (already in camelCase)
@@ -5232,13 +5234,16 @@ export class GodotServer {
     // remediation message; non-import-eligible paths (.tres, .gd, ...)
     // pass through the gate unchanged.
     try {
-      const probe = detectAssetImportState(args.projectPath, args.resourcePath);
+      const probe = detectAssetImportState(args.projectPath, args.resourcePath, {
+        pathPolicy: this.pathPolicy,
+      });
       if (probe.state === 'missing-sidecar') {
         return createErrorResponse(probe.diagnostic);
       }
     } catch {
-      // Path-policy denials (absolute paths, traversal) flow through the
-      // validatePath gate above; swallow unexpected helper failures so the
+      // Canonical path and allowed-root denials are enforced by the
+      // request-boundary `assertSafeToolPaths` guard before this handler;
+      // this catch only absorbs unexpected helper failures so the
       // create_resource happy path is not taken down by a probe regression.
     }
     return this.headlessOp('create_resource', args, a => ({
@@ -6564,13 +6569,17 @@ export class GodotServer {
     // .tres source file from a raw asset that has never been imported.
     if (args.action === 'load') {
       try {
-        const probe = detectAssetImportState(args.projectPath, args.resourcePath);
+        const probe = detectAssetImportState(args.projectPath, args.resourcePath, {
+          pathPolicy: this.pathPolicy,
+        });
         if (probe.state === 'missing-sidecar') {
           return createErrorResponse(probe.diagnostic);
         }
       } catch {
-        // Path-policy denials (absolute paths, traversal) flow through the
-        // validatePath gate above; swallow unexpected helper failures.
+        // Canonical path and allowed-root denials are enforced by the
+        // request-boundary `assertSafeToolPaths` guard before this handler;
+        // this catch only absorbs unexpected helper failures so the
+        // manage_resource happy path is not taken down by a probe regression.
       }
     }
     return this.headlessOp('manage_resource', args, a => ({

@@ -196,6 +196,18 @@ describe('detectAssetImportState — pure helper (Coding-Solo#103)', () => {
     expect(result.state).toBe('missing-source');
     expect(result.diagnostic).toMatch(/missing\.png/);
   });
+
+  it.each(['data.json', 'archive.pck'])(
+    'does not require an .import sidecar for non-import file %s', (relativePath) => {
+      const root = makeProject();
+      writeFile(root, relativePath, 'resource data');
+      const result = detectAssetImportState(root, relativePath, {
+        exists: existsSync,
+      });
+      expect(result.state).toBe('not-an-asset');
+      expect(result.diagnostic).not.toMatch(/--import/);
+    },
+  );
 });
 
 describe('resolveAssetImportRequirement — actionable remediation string', () => {

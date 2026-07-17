@@ -4,26 +4,9 @@
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/senior-takeover`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Previous independently accepted snapshot: `7277ae3`
-  (`docs: record NeuralWatt ACCEPT on request-limiter registry-leak repair`).
-- Previous committed package: `test: lock in physics-frame game_wait wire contract (regression for #14)`
-  (wire-level regression coverage that asserts `BridgeClient` forwards
-  `frameType:"physics"` byte-for-byte as `frame_type:"physics"`, that
-  `frameType` and `frames` defaults resolve at the transform boundary,
-  that the bridge socket survives a wait-then-follow-up flow, and that
-  the GDScript `_cmd_wait` source still contains both `physics_frame` and
-  `process_frame` branches).
-- Current local package: `fix: gate attach_script C# scripts against non-.NET projects (regression for #114)`
-  (typed-error gate in `handleAttachScript` that rejects `scriptPath`
-  ending in anything other than `.gd` or `.cs`, and rejects `.cs` against
-  a project without a `.csproj` on disk using the same diagnostic
-  `create_csharp_script` already uses; new wire-level coverage in
-  `tests/attach-script-dotnet-gate.test.ts` exercises both branches
-  through the real MCP `tools/call` boundary with a stubbed
-  `executeOperation`).
-- Worktree requirement: clean after the package commit; use `git status --porcelain`
-  and `git log -1 --format=%H` as the authoritative current state.
-- Vitest: 32 files, 672 tests passed after this package (was 668 before).
+- Current local package under repair: `fix: correct asset import eligibility and canonical probe wiring` (follow-up to `88dda1e`, preserving the original package immutable and addressing the independent NeuralWatt REJECT).
+- Current HEAD before the repair commit: `88dda1e449ad784bd76cfe324ce441941ae06715`.
+- Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
 
 ## Current package — modify→read round-trip contract for resource properties
 
@@ -632,17 +615,26 @@ requires the gates to be rerun on the final committed state.
    that can resolve a PNG through the editor's import-on-open pipeline.
 8. Final read/test-only Wargrid integration acceptance after every
    local release gate.
+## Current package — asset import prerequisite repair (#103)
+
+Independent NeuralWatt review of immutable commit `88dda1e449ad784bd76cfe324ce441941ae06715` returned `VERDICT | REJECT` because `.json` and `.pck` were incorrectly treated as requiring generated `.import` sidecars. This repair removes those extensions from the import-eligible set, passes the server's canonical `PathPolicy` into all three probes, corrects the handler comments to name the request-boundary `assertSafeToolPaths` guard, hardens advisory shell quoting, and adds two regression cases for direct-loaded `.json`/`.pck` files. The original `88dda1e` commit is not amended.
+
+Reviewer observations addressed:
+
+- Blocking: “`.json` and `.pck` are misclassified as Godot-importable ... remove them or route through `not-an-asset`.” Both now return `not-an-asset` with no `--import` remediation.
+- Non-blocking: handler comments now identify `assertSafeToolPaths` rather than claiming `validatePath` rejects absolute/null/symlink cases.
+- Non-blocking: handlers pass `this.pathPolicy` so probe resolution uses the same canonical root policy as the request boundary.
+- Non-blocking: project paths in advisory command text escape embedded double quotes.
+
+The repair remains local-only and does not push, publish, create a PR/release, upload a package, write `docs/maintainers/release-candidate.md`, or send the candidate-ready notification. It must receive a fresh independent NeuralWatt review against its exact immutable commit after all gates pass.
+
+## Verification on the repair filesystem
+
+- Focused asset-import test: 16 tests passed.
+- Full canonical gates after the repair source/test edits: `npm test` 34 files, 695 tests passed; `npm run build` passed; `npm audit --audit-level=high` reported 0 vulnerabilities; `git diff --check` passed.
+- Godot executable: unavailable on this runner (`godot`/`godot4` not found); real-Godot and Wargrid acceptance remain unproven.
+- Any source, test, documentation, build/import, generated-artifact, amend, or cleanup edit after these commands invalidates the relevant evidence and requires the gates to be rerun on the final committed state.
 
 ## Next safe action
 
-The asset-import-prerequisite gate (#103) is closed at the typed error
-boundary for every binary-asset code path. The next safe action remains
-the generic headless Godot test runner with GUT adapter (#29), which
-unblocks the real-Godot verification lanes for the round-trip, tween,
-physics-frame, C# / .NET, and asset-import regressions at once. Begin
-with repository evidence and a focused failing behavioral test;
-preserve the five closed-list profiles, all 158 tool contracts, the
-three limiter knobs, and the new import-prerequisite helper. Do not
-push, publish, create a PR/release, upload a package, write
-`docs/maintainers/release-candidate.md`, or send the candidate-ready
-notification.
+Stage only the repair-owned files (`src/godot/asset-import-state.ts`, `src/server.ts`, `tests/asset-import-prerequisite.test.ts`, and this handoff plus the #103 inventory row), commit locally with a focused Conventional Commit, rerun all canonical gates on the committed state, then dispatch NeuralWatt against the exact repair commit. Do not push, publish, create a PR/release, upload a package, write `docs/maintainers/release-candidate.md`, or send the candidate-ready notification.
