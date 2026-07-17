@@ -7300,10 +7300,49 @@ export class GodotServer {
   private async handleManageCiPipeline(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.action) return createErrorResponse('projectPath and action are required.');
-    if (!validatePath(args.projectPath)) return createErrorResponse('Invalid path.');
-    const projectFile = join(args.projectPath, 'project.godot');
-    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
-    const workflowDir = join(args.projectPath, '.github', 'workflows');
+    // Strict action allowlist BEFORE any filesystem call, matching the
+    // sibling `manage_layers` / `manage_plugins` / `manage_shader` gates.
+    if (args.action !== 'read' && args.action !== 'create') {
+      return createErrorResponse(`Invalid action: must be one of read, create (got ${JSON.stringify(args.action)}).`);
+    }
+    // Resolve the project through the request-boundary path policy so a
+    // caller cannot use lexical `validatePath` to bypass canonical-root
+    // enforcement (matches the gate applied to `manage_layers`,
+    // `manage_plugins`, `manage_shader`, `set_main_scene`,
+    // `manage_translations`).
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(error?.message || 'Invalid project path.');
+    }
+    // Strict godotVersion gate: the value is embedded directly into shell
+    // commands inside the generated YAML (`mkdir -p ... ${godotVersion}`,
+    // `mv /root/.local/share/godot/export_templates/${godotVersion}/* ...`),
+    // so a caller-supplied string MUST be a literal Godot release tag.
+    // Without this gate a newline / quote / backtick / `;` lets the caller
+    // break out of the workflow file content and inject arbitrary
+    // GitHub Actions steps or shell commands.
+    const godotVersion = args.godotVersion || '4.3-stable';
+    if (typeof godotVersion !== 'string' || !/^[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-z0-9]+)?$/.test(godotVersion)) {
+      return createErrorResponse(`Invalid godotVersion: must match Godot release-tag allowlist (got ${JSON.stringify(godotVersion)}).`);
+    }
+    // Strict platforms gate: each entry is interpolated into
+    // `godot --export-release "${p}"` shell steps. A newline / quote /
+    // backtick / `;` lets the caller break out of the YAML and inject
+    // arbitrary shell.
+    const rawPlatforms = args.platforms || ['linux'];
+    const platformsAllowlist = new Set(['linux', 'windows', 'macos', 'web', 'android', 'ios']);
+    const platforms: string[] = [];
+    for (const p of rawPlatforms) {
+      if (typeof p !== 'string' || !platformsAllowlist.has(p)) {
+        return createErrorResponse(`Invalid platforms entry: must be one of ${[...platformsAllowlist].join(', ')} (got ${JSON.stringify(p)}).`);
+      }
+      platforms.push(p);
+    }
+    const projectFile = join(projectRoot, 'project.godot');
+    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${projectRoot}`);
+    const workflowDir = join(projectRoot, '.github', 'workflows');
     const workflowPath = join(workflowDir, 'godot-export.yml');
     try {
       if (args.action === 'read') {
@@ -7312,8 +7351,6 @@ export class GodotServer {
         return { content: [{ type: 'text', text: content }] };
       } else if (args.action === 'create') {
         if (!existsSync(workflowDir)) mkdirSync(workflowDir, { recursive: true });
-        const godotVersion = args.godotVersion || '4.3-stable';
-        const platforms = args.platforms || ['linux'];
         const exportSteps = platforms.map((p: string) => `      - name: Export ${p}\n        run: godot --headless --export-release "${p}" build/${p}/game`).join('\n');
         const workflow = `name: Godot Export\non:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\njobs:\n  export:\n    runs-on: ubuntu-latest\n    container:\n      image: barichello/godot-ci:${godotVersion}\n    steps:\n      - uses: actions/checkout@v4\n      - name: Setup export templates\n        run: |\n          mkdir -p ~/.local/share/godot/export_templates/${godotVersion}\n          mv /root/.local/share/godot/export_templates/${godotVersion}/* ~/.local/share/godot/export_templates/${godotVersion}/ || true\n${exportSteps}\n      - uses: actions/upload-artifact@v4\n        with:\n          name: game-builds\n          path: build/\n`;
         writeFileSync(workflowPath, workflow, 'utf8');
@@ -7328,19 +7365,60 @@ export class GodotServer {
   private async handleManageDockerExport(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.action) return createErrorResponse('projectPath and action are required.');
-    if (!validatePath(args.projectPath)) return createErrorResponse('Invalid path.');
-    const projectFile = join(args.projectPath, 'project.godot');
-    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
-    const dockerfilePath = join(args.projectPath, 'Dockerfile');
+    // Strict action allowlist BEFORE any filesystem call, matching the
+    // sibling `manage_layers` / `manage_plugins` / `manage_shader` /
+    // `manage_ci_pipeline` gates.
+    if (args.action !== 'read' && args.action !== 'create') {
+      return createErrorResponse(`Invalid action: must be one of read, create (got ${JSON.stringify(args.action)}).`);
+    }
+    // Resolve the project through the request-boundary path policy so a
+    // caller cannot use lexical `validatePath` to bypass canonical-root
+    // enforcement (matches the gate applied to `manage_layers`,
+    // `manage_plugins`, `manage_shader`, `set_main_scene`,
+    // `manage_translations`, `manage_ci_pipeline`).
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(error?.message || 'Invalid project path.');
+    }
+    // Strict godotVersion gate: the value is embedded directly into shell
+    // commands inside the generated Dockerfile
+    // (`wget ... /releases/download/\${GODOT_VERSION}/...`,
+    // `mv templates/* /root/.local/share/godot/export_templates/\${GODOT_VERSION}/`),
+    // so a caller-supplied string MUST be a literal Godot release tag.
+    // Without this gate a newline / quote / backtick / `;` lets the caller
+    // break out of the Dockerfile and inject arbitrary Dockerfile
+    // instructions or shell commands that run on every CI build.
+    const godotVersion = args.godotVersion || '4.3-stable';
+    if (typeof godotVersion !== 'string' || !/^[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-z0-9]+)?$/.test(godotVersion)) {
+      return createErrorResponse(`Invalid godotVersion: must match Godot release-tag allowlist (got ${JSON.stringify(godotVersion)}).`);
+    }
+    // Strict baseImage gate: the value is interpolated directly into the
+    // `FROM ${baseImage}` Dockerfile directive. A newline lets the caller
+    // add arbitrary Dockerfile instructions (`RUN ...`, `COPY ...`,
+    // `CMD ...`) that run at every image build.
+    const baseImage = args.baseImage || 'ubuntu:22.04';
+    if (typeof baseImage !== 'string' || !/^[a-z0-9]+([._-][a-z0-9]+)*(:[a-z0-9._-]+)?$/.test(baseImage)) {
+      return createErrorResponse(`Invalid baseImage: must match Docker image reference allowlist (got ${JSON.stringify(baseImage)}).`);
+    }
+    // Strict exportPreset gate: the value is interpolated into the
+    // runtime `CMD ["godot", ..., "${exportPreset}", ...]` shell command.
+    // A newline / quote / `;` lets the caller break out and inject
+    // arbitrary shell at container startup.
+    const exportPreset = args.exportPreset || 'Linux/X11';
+    if (typeof exportPreset !== 'string' || !/^[A-Za-z0-9 _.\-/]+$/.test(exportPreset)) {
+      return createErrorResponse(`Invalid exportPreset: must match Godot export-preset name allowlist (got ${JSON.stringify(exportPreset)}).`);
+    }
+    const projectFile = join(projectRoot, 'project.godot');
+    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${projectRoot}`);
+    const dockerfilePath = join(projectRoot, 'Dockerfile');
     try {
       if (args.action === 'read') {
         if (!existsSync(dockerfilePath)) return createErrorResponse('No Dockerfile found in project root.');
         const content = readFileSync(dockerfilePath, 'utf8');
         return { content: [{ type: 'text', text: content }] };
       } else if (args.action === 'create') {
-        const godotVersion = args.godotVersion || '4.3-stable';
-        const baseImage = args.baseImage || 'ubuntu:22.04';
-        const exportPreset = args.exportPreset || 'Linux/X11';
         const dockerfile = `FROM ${baseImage}\n\nARG GODOT_VERSION=${godotVersion}\n\nRUN apt-get update && apt-get install -y \\\n    wget unzip ca-certificates \\\n    && rm -rf /var/lib/apt/lists/*\n\nRUN wget -q https://github.com/godotengine/godot/releases/download/\${GODOT_VERSION}/Godot_v\${GODOT_VERSION}_linux.x86_64.zip \\\n    && unzip Godot_v\${GODOT_VERSION}_linux.x86_64.zip \\\n    && mv Godot_v\${GODOT_VERSION}_linux.x86_64 /usr/local/bin/godot \\\n    && rm Godot_v\${GODOT_VERSION}_linux.x86_64.zip\n\nRUN wget -q https://github.com/godotengine/godot/releases/download/\${GODOT_VERSION}/Godot_v\${GODOT_VERSION}_export_templates.tpz \\\n    && mkdir -p /root/.local/share/godot/export_templates/\${GODOT_VERSION} \\\n    && unzip Godot_v\${GODOT_VERSION}_export_templates.tpz \\\n    && mv templates/* /root/.local/share/godot/export_templates/\${GODOT_VERSION}/ \\\n    && rm -rf templates Godot_v\${GODOT_VERSION}_export_templates.tpz\n\nWORKDIR /game\nCOPY . .\n\nRUN mkdir -p build\nCMD ["godot", "--headless", "--export-release", "${exportPreset}", "build/game"]\n`;
         writeFileSync(dockerfilePath, dockerfile, 'utf8');
         return { content: [{ type: 'text', text: `Dockerfile created for headless Godot export (preset: ${exportPreset})` }] };

