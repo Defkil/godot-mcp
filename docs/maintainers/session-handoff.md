@@ -1,13 +1,225 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-17 (tick T21)
+- Timestamp: 2026-07-17 (tick T22)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: `feat: gate manage_scene_signals / manage_theme_resource / manage_scene_structure with canonical PathPolicy contract` (the new sibling-gate package, fully described in the topmost "Current package" section below; focused tests 6/6 green, full canonical gates green).
+- Current local package: `feat: gate create_project / create_csharp_script / validate_scripts with canonical PathPolicy contract` (the new sibling-gate package, fully described in the topmost "Current package" section below; focused tests 8/8 green, full canonical gates green).
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `d00c4451cfd9a8443f12f70ee83814c476a73c63`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
+
+## Current package — create_project / create_csharp_script / validate_scripts PathPolicy gate (sibling of tugcantopaloglu#9)
+
+The previous handoff listed four remaining lexical-`validatePath`-gated
+handlers as the next bounded package. Three of those
+(`handleCreateProject`, `handleCreateCsharpScript`,
+`handleValidateScripts` `args.scriptPaths`) carried a documented path
+where canonical `PathPolicy` resolution could be adopted without a
+separate audit; the fourth — the shared `headlessOp` lexical boundary
+plus the inner-loop `handleValidateScripts` `rel` lexical check for
+internal-relative paths — carries documented semantic differences that
+defer its migration. This package closes the three simple project-only
+gates in one cohesive commit.
+
+Each migrated handler historically opened with a lexical
+`validatePath(args.<path>)` boundary and then `join`-ed the
+user-supplied value into `mkdirSync` / `writeFileSync` /
+`existsSync`. The lexical `validatePath` only rejects empty /
+`..`-prefixed / null-byte strings — it does not enforce the
+canonical-roots list or canonical-member resolution. The
+request-boundary `assertSafeToolPaths` guard already rejects every
+canonical projectPath that would escape the configured `PathPolicy`
+roots BEFORE the handler is called, so the runtime is not exposed to a
+fresh escape. This package proves the same contract is enforced
+*inside the handler body itself* by replacing the lexical boundary
+with `pathPolicy.assertProject(args.projectPath)` (and, where
+applicable, `pathPolicy.resolveProjectMember(projectRoot,
+args.<member>)`) and returning a typed `isError: true` envelope
+BEFORE any filesystem or subprocess call when either resolution
+throws.
+
+The package has three coherent changes:
+
+1. **`src/server.ts`** — focused gate additions to the three handlers,
+   matching the sibling `core_file_io` / `manage_shader` /
+   `set_main_scene` / `manage_translations` / `manage_autoloads /
+   manage_input_map / manage_export_presets` / `manage_layers /
+   manage_plugins` / `info-scene-settings-handler` /
+   `script-resource-handler` /
+   `manage_scene_signals / manage_theme_resource /
+   manage_scene_structure` pattern exactly. Per-handler shape:
+
+   - **`handleCreateProject`** — replaces the lexical
+     `validatePath(args.projectPath)` boundary with
+     `pathPolicy.assertProject(args.projectPath)`. The canonical
+     `projectRoot` is now used by `existsSync(projectRoot)`,
+     `mkdirSync(projectRoot, { recursive: true })`,
+     `join(projectRoot, 'project.godot')`,
+     `writeFileSync(projectFile, content, 'utf8')`,
+     `join(projectRoot, '${assemblyName}.csproj')`, and the
+     `A project.godot already exists at this path: ${projectRoot}`
+     error message. `handleCreateProject` is the only sibling handler
+     whose target `args.projectPath` legitimately does not yet exist
+     on disk; `pathPolicy.canonicalizeNearest` walks up to the nearest
+     existing ancestor and prefixes the new segments, so
+     `assertProject` canonicalizes a fresh path without losing the
+     canonical-root contract.
+   - **`handleCreateCsharpScript`** — same shape:
+     `assertProject(args.projectPath)` followed by
+     `resolveProjectMember(projectRoot, args.scriptPath)`. The
+     canonical `projectRoot` is now used by `join(projectRoot,
+     'project.godot')`, the `isDotnetProject(projectRoot)` check,
+     and the `Not a valid Godot project: ${projectRoot}` error
+     message. The canonical `scriptFull` is now used by
+     `dirname(scriptFull)`, `mkdirSync(dir, { recursive: true })`,
+     and `writeFileSync(scriptFull, source, 'utf8')`. The package
+     preserves every existing strict-input gate: `scriptPath must
+     end with .cs`, the `isValidCsharpIdentifier` file-base check,
+     the `className === fileBase` invariant, and the success
+     message.
+   - **`handleValidateScripts`** — extends the existing
+     `assertProject(args.projectPath)` gate (introduced in commit
+     `b9fe537`) with a new canonical-member loop that calls
+     `pathPolicy.resolveProjectMember(projectRoot, candidate)` for
+     every explicit `args.scriptPaths` entry BEFORE any per-file
+     `existsSync` / `runGdScriptCheck` call. Surfaces a typed
+     `isError: true` envelope `Invalid scriptPath
+     "${candidate}": ...` when the canonical-member contract fails.
+     Internal-relative paths from `listChangedGdFiles` /
+     `listAllGdFiles` continue to flow through the lexical
+     `validatePath(rel)` check at line 7062 because they are
+     produced by trusted internal scanners, not user input — that
+     inner-loop migration is deferred.
+
+   The diff is 95 insertions, 15 deletions across the three handlers
+   (the four comments together consume ~30 lines of the insertion
+   count). The diff adds no new helper modules, no new tests outside
+   the focused test files, no schema changes, no handler signature
+   changes, no capability policy changes, no BridgeClient changes,
+   no `validatePath` lexical helper changes, and no changes to
+   `headlessOp` itself.
+
+2. **`tests/create-project-handler-injection.test.ts`** (new, 5 tests)
+   — exercises the real `GodotServer` + `PathPolicy` +
+   `CapabilityPolicy` + the private handler methods. Each test uses
+   a temporary Godot project under the OS temp directory, removed
+   in `afterEach`. The 5 tests cover:
+
+   - **`create_project`** (2 tests): `projectPath` outside the
+     configured allowed roots rejected for an outside-roots
+     sibling-temp directory; absolute `projectPath` resolving
+     outside the configured allowed roots rejected AND the handler
+     does not create a `project.godot` inside the outside-roots
+     sentinel directory.
+   - **`create_csharp_script`** (3 tests): `projectPath` outside
+     the configured allowed roots rejected for an outside-roots
+     sibling-temp directory (with the `.NET project` fallback
+     asserted *absent*); `scriptPath = 'res://../etc/passwd.cs'`
+     rejected with a canonical-member error message; absolute
+     `scriptPath = 'C:/Windows/System32/evil.cs'` rejected with a
+     canonical-member error message BEFORE any `mkdirSync` /
+     `writeFileSync` call.
+
+   Every `projectPath`-outside-roots rejection asserts the
+   canonical-root error message (`outside the (configured )?allowed
+   roots`) AND asserts the relevant fallback (`A project.godot
+   already exists`, `Failed to create project`, `Not a valid Godot
+   project`, `Not a Godot .NET project`) is *absent*, so the gate is
+   proven to fire BEFORE any filesystem reach. Every `scriptPath`
+   canonical-member rejection asserts the canonical-member error
+   message AND asserts the `create_csharp_script failed: ...`
+   fallback is *absent*, so the gate is proven to fire BEFORE any
+   `mkdirSync` / `writeFileSync`.
+
+3. **`tests/validate-scripts-handler-injection.test.ts`** (new, 3
+   tests) — exercises the real `GodotServer` + `PathPolicy` +
+   `CapabilityPolicy` + the private handler method. Each test uses
+   a temporary Godot project under the OS temp directory, removed
+   in `afterEach`. The 3 tests cover:
+
+   - **`validate_scripts`** (3 tests): `projectPath` outside the
+     configured allowed roots rejected (regression — the existing
+     pathPolicy gate is already correct); explicit `scriptPaths`
+     absolute-path escape rejected with a typed canonical-member
+     error message; explicit `scriptPaths` `..` traversal rejected.
+
+   Every `projectPath`-outside-roots rejection asserts the
+   canonical-root error message AND asserts the `Not a valid Godot
+   project` fallback is *absent*. Every explicit `scriptPaths`
+   canonical-member rejection asserts the canonical-member error
+   message AND asserts the `Script does not exist` /
+   `Not a valid .gd path` fallbacks are NOT the surface message
+   (the gate fires before the per-file loop).
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every
+  handler, the 5 closed-list profiles, the package identity, the
+  path policy, the runtime bridge, and the MIT attribution;
+- does **not** touch `src/scripts/godot_operations.gd`,
+  `src/scripts/mcp_interaction_server.gd`, the tool registry, the
+  capability policy, the request limiter, the operation runner,
+  the BridgeClient, the upstream `bridge-installer.ts`, the sibling
+  `manage_*` gates, `core_file_io` /
+  `info-scene-settings-handler-injection` /
+  `script-resource-handler` /
+  `manage-autoloads-input-map-export-presets-handler-injection` /
+  `manage-scene-signals-theme-resource-scene-structure-handler-injection`
+  gates, the shared `headlessOp` lexical boundary, or any other
+  handler;
+- the only documented contract changes are that
+  `create_project.args.projectPath` (target may not exist yet) MUST
+  now resolve through the canonical `PathPolicy`, that
+  `create_csharp_script.args.scriptPath` MUST now resolve through
+  `pathPolicy.resolveProjectMember`, and that explicit
+  `validate_scripts.args.scriptPaths` entries MUST now resolve
+  through `pathPolicy.resolveProjectMember`, matching the
+  strict-input contract the sibling gates already enforce;
+- does not push, publish, create a PR/release, upload a package,
+  write `docs/maintainers/release-candidate.md`, or send the
+  candidate-ready notification.
+
+**Rationale for the remaining deferred handlers:**
+
+- Shared `headlessOp` lexical boundary (line 681) — deferred
+  because it requires auditing every `headlessOp` caller for
+  handler-level ownership of the gate; `attach_script` /
+  `create_resource` / `manage_resource` already own their own
+  gates.
+- `handleRunProject` `args.scene` — runtime Godot CLI argument,
+  not a filesystem path under the project root.
+- `handleValidateScripts` inner-loop `rel` lexical check at line
+  7062 — `rel` is a relative path produced by
+  `listChangedGdFiles` / `listAllGdFiles`, internal trusted input
+  rather than user input.
+
+Source evidence:
+
+- `src/server.ts` is the only modified source file.
+- `tests/create-project-handler-injection.test.ts` (5 tests) and
+  `tests/validate-scripts-handler-injection.test.ts` (3 tests)
+  are the only new test files.
+- `docs/maintainers/issue-inventory.md` adds item 25 (the only
+  docs edit).
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/create-project-handler-injection.test.ts
+  tests/validate-scripts-handler-injection.test.ts`: 2 files, 8
+  tests passed (RED 7/8 confirmed before the fix; GREEN 8/8 after
+  the regex adjustment on `relative to the project root`).
+- `npm test`: 48 files, 831 tests passed (was 823 before this
+  package; +8 new tests).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0).
+
+Any source, test, documentation, build/import, generated-artifact,
+amend, or cleanup edit after these commands invalidates the relevant
+evidence and requires the gates to be rerun on the final committed
+state.
 
 ## Current package — manage_scene_signals / manage_theme_resource / manage_scene_structure PathPolicy gate (sibling of tugcantopaloglu#9)
 
@@ -423,22 +635,30 @@ be rerun on the final committed state.
 
 ## Next safe action
 
-The next bounded package is to extend the canonical-root gate to the
-four remaining handlers that still carry a lexical boundary on a
-project-bearing path or member path:
+The previous handoff listed four remaining lexical-`validatePath`-gated
+handlers as the next bounded package. The
+`create_project` / `create_csharp_script` / `validate_scripts`
+sibling-gate package (described in the topmost "Current package"
+section above) closed three of those four. The remaining list is:
 
-`handleRunProject` `args.scene` (runtime CLI argument, but if a
-canonical resolution becomes available it should adopt
-`pathPolicy.resolveProjectMember`), `handleCreateProject`
-(requires a non-existent-path gate), `handleCreateCsharpScript`
-(requires a non-existent-path gate plus the existing C# / .NET
-gate), and `handleValidateScripts` (inner-loop `rel` plus the
-user-supplied `args.scriptPaths` array). Each handler can be
-ported one at a time with a focused wire-level test mirroring
-`tests/manage-autoloads-input-map-export-presets-handler-injection.test.ts`.
-Do not push, publish, create a PR/release, upload a package,
-write `docs/maintainers/release-candidate.md`, or send the
-candidate-ready notification.
+- the shared `headlessOp` lexical boundary at line 681 (deferred
+  because it requires auditing every `headlessOp` caller for
+  handler-level ownership of the gate);
+- `handleRunProject` `args.scene` — runtime Godot CLI argument,
+  not a filesystem path under the project root;
+- the inner-loop `handleValidateScripts` `rel` lexical check at
+  line 7062 for `listChangedGdFiles` / `listAllGdFiles`
+  internal-relative paths (deferred because those paths are
+  produced by trusted internal scanners, not user input).
+
+Each remaining handler can be ported one at a time with a focused
+wire-level test mirroring
+`tests/manage-autoloads-input-map-export-presets-handler-injection.test.ts`
+or
+`tests/create-project-handler-injection.test.ts`. Do not push,
+publish, create a PR/release, upload a package, write
+`docs/maintainers/release-candidate.md`, or send the candidate-ready
+notification.
 
 
 

@@ -358,3 +358,128 @@ Oliver explicitly approves the exact reviewed candidate.
     private handler methods directly via `(server as any).handleXxx(args)`
     (bypassing `tools/call`) to prove the gate lives in the handler
     body itself, not only in the request-boundary guard.
+
+25. The remaining lexical-`validatePath` defense-in-depth gap persisted
+    in three additional sibling handlers that the previous packages
+    identified as the next-follow-up batch:
+
+    - **`handleCreateProject`** — the only sibling handler whose target
+      `args.projectPath` legitimately does not yet exist on disk. The
+      handler historically opened with
+      `if (!validatePath(args.projectPath)) return createErrorResponse('Invalid path.');`
+      and then `mkdirSync`'d the user-supplied path and `writeFileSync`-ed
+      a `project.godot` file into it. The lexical `validatePath` only
+      rejects empty / `..`-prefixed / null-byte strings, so any other
+      absolute path was silently `mkdirSync`-ed (and a `project.godot`
+      written into a directory the operator never intended to register
+      as a Godot project). The takeover now applies the same
+      `pathPolicy.assertProject(args.projectPath)` pattern the sibling
+      gates already use, returning a typed `isError: true` envelope
+      `Project path is outside the configured allowed roots: ...`
+      BEFORE any `mkdirSync` / `writeFileSync` call. The
+      `pathPolicy.canonicalizeNearest` walk-up-the-nearest-existing-ancestor
+      strategy means non-existent targets still canonicalize correctly
+      without losing the canonical-root contract. The package preserves
+      the `A project.godot already exists at this path` check, the
+      `.csproj` write path, and the success message — only the
+      canonical root and the error wording now flow through
+      `pathPolicy.assertProject`.
+
+    - **`handleCreateCsharpScript`** — a two-path sibling handler
+      that opens with
+      `if (!validatePath(args.projectPath) || !validatePath(args.scriptPath)) return createErrorResponse('Invalid path.')`
+      and then `join(args.projectPath, args.scriptPath)`-ed the
+      user-supplied values into `mkdirSync` / `writeFileSync`. The
+      lexical `validatePath` only rejects empty / `..`-prefixed /
+      null-byte strings and lets absolute paths through: an attacker
+      could pass `scriptPath = 'C:/Windows/System32/evil.cs'` and the
+      handler would `mkdirSync` a `C:/Windows/System32` directory
+      inside the project tree (the joined path resolved relative to
+      the project root, so the failure mode was an `ENOENT` from a
+      nested `mkdirSync` rather than a typed denial). The takeover now
+      applies the same `pathPolicy.assertProject(args.projectPath)` +
+      `pathPolicy.resolveProjectMember(projectRoot, args.scriptPath)`
+      pattern the sibling `create_project` + `manage_scene_signals` /
+      `manage_theme_resource` / `manage_scene_structure` /
+      `core_file_io` / `manage_shader` / `set_main_scene` /
+      `manage_translations` gates already use, returning a typed
+      `isError: true` envelope BEFORE any `mkdirSync` /
+      `writeFileSync` call. The canonical `projectRoot` is then used
+      for `join(projectRoot, 'project.godot')`, the
+      `isDotnetProject(projectRoot)` check, and the
+      `Not a valid Godot project: ${projectRoot}` error message so the
+      operator sees the resolved canonical path. The package preserves
+      every existing strict-input gate: `scriptPath must end with .cs`,
+      the `isValidCsharpIdentifier` file-base check, the
+      `className === fileBase` invariant, and the success message.
+
+    - **`handleValidateScripts`** — already had
+      `pathPolicy.assertProject` on `args.projectPath` (introduced in
+      commit `b9fe537`), but the inner candidate loop at line 7062
+      still relied on lexical `validatePath(rel)` for both
+      listChangedGdFiles / listAllGdFiles internal-relative paths AND
+      user-supplied explicit `args.scriptPaths`. The lexical check
+      only rejects empty / `..`-prefixed / null-byte strings, so an
+      explicit absolute `scriptPaths` entry (`C:/Windows/System32/evil.gd`)
+      slipped through and was silently checked against
+      `existsSync(join(projectRoot, 'C:/Windows/System32/evil.gd'))`,
+      which on Windows finds the absolute-path file existence but on
+      POSIX looks for the literal path inside the project root. The
+      takeover now applies `pathPolicy.resolveProjectMember(projectRoot, candidate)`
+      to every explicit `args.scriptPaths` entry BEFORE any
+      `existsSync` / `runGdScriptCheck` call, returning a typed
+      `isError: true` envelope
+      `Invalid scriptPath "${candidate}": ...` when the canonical-member
+      contract fails. Internal-relative paths from
+      `listChangedGdFiles` / `listAllGdFiles` continue to flow through
+      the lexical `validatePath(rel)` check at line 7062 because they
+      are produced by trusted internal scanners, not user input.
+
+    Wire-level coverage in `tests/create-project-handler-injection.test.ts`
+    (5 tests) and `tests/validate-scripts-handler-injection.test.ts`
+    (3 tests), for a combined 8 new tests:
+
+    - **`create_project`** (2 tests): `projectPath` outside the
+      configured allowed roots rejected; absolute `projectPath`
+      resolving outside the configured allowed roots rejected AND the
+      handler does not create a `project.godot` inside the outside-roots
+      sentinel directory.
+    - **`create_csharp_script`** (3 tests): `projectPath` outside the
+      configured allowed roots rejected (and the `.NET project` fallback
+      is NOT the surface message); `scriptPath` `..` traversal rejected;
+      absolute `scriptPath` (`C:/Windows/System32/evil.cs`) rejected
+      with a typed canonical-member error message BEFORE any
+      `mkdirSync` / `writeFileSync` fires.
+    - **`validate_scripts`** (3 tests): `projectPath` outside the
+      configured allowed roots rejected (the existing pathPolicy gate
+      is already correct — covered as regression); explicit
+      `scriptPaths` absolute-path escape rejected with a typed
+      canonical-member error message; explicit `scriptPaths` `..`
+      traversal rejected.
+
+    The tests invoke the private handler methods directly via
+    `(server as any).handleXxx(args)` (bypassing `tools/call`), the
+    same wiring pattern as the sibling `info-scene-settings-handler` /
+    `script-resource-handler` / `manage-autoloads-input-map-export-presets-handler` /
+    `manage-scene-signals-theme-resource-scene-structure-handler` gates.
+    Every `projectPath`-outside-roots rejection asserts the
+    canonical-root error message AND asserts the relevant fallback
+    (`A project.godot already exists`, `Failed to create project`,
+    `Not a valid Godot project`, `Not a Godot .NET project`) is
+    *absent*, so the gate is proven to fire BEFORE any filesystem
+    reach. Every `scriptPath` canonical-member rejection asserts the
+    canonical-member error message AND asserts the
+    `create_csharp_script failed: ...` / Godot spawn fallback is
+    *absent*, so the gate is proven to fire BEFORE any `mkdirSync` /
+    `writeFileSync`.
+
+    The remaining deferred handlers from the previous handoff's
+    "next safe action" list are: the shared `headlessOp` lexical
+    boundary at line 681 (deferred because it requires auditing every
+    `headlessOp` caller for handler-level ownership of the gate);
+    `handleRunProject` `args.scene` (runtime Godot CLI argument, not a
+    filesystem path under the project root); and the inner-loop
+    lexical `validatePath(rel)` check at line 7062 inside
+    `handleValidateScripts` for `listChangedGdFiles` /
+    `listAllGdFiles` internal-relative paths (deferred because those
+    paths are produced by trusted internal scanners, not user input).
