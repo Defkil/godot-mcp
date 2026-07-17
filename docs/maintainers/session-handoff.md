@@ -1,13 +1,239 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-17 (tick T19)
+- Timestamp: 2026-07-17 (tick T20)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: `feat: gate manage_input_map and manage_export_presets against newline / section injection` (the new sibling-gate package, fully described in the "Current package — manage_input_map / manage_export_presets injection gate" section below; focused tests 13/13 green, full canonical gates green).
+- Current local package: `feat: gate manage_autoloads / manage_input_map / manage_export_presets with canonical PathPolicy contract` (the new sibling-gate package, fully described in the topmost "Current package" section below; focused tests 6/6 green, full canonical gates green).
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `d00c4451cfd9a8443f12f70ee83814c476a73c63`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
+
+## Current package — manage_autoloads / manage_input_map / manage_export_presets PathPolicy gate (sibling of tugcantopaloglu#9)
+
+The previous handoff listed the seven remaining lexical-`validatePath`-gated
+file-mutation handlers as the next bounded package. Three of those
+(`handleManageAutoloads`, `handleManageInputMap`, `handleManageExportPresets`)
+carry no semantic difference from the `info / scene / settings / sprite /
+mesh-library / export` migration pattern that landed in commit `446964b`;
+the other four (`handleCreateProject`, `handleCreateCsharpScript`,
+`handleValidateScripts`, plus the `handleRunProject` `args.scene` runtime
+CLI argument) carry documented semantic differences that defer their
+migration. This package closes the three simple project-only gates in
+one cohesive commit.
+
+Each migrated handler historically opened with
+`if (!validatePath(args.projectPath)) return createErrorResponse('Invalid path.');`
+and then `join(args.projectPath, 'project.godot')`-ed the user-supplied
+value into `existsSync` / `readFileSync` / `writeFileSync`. The lexical
+`validatePath` only rejects empty / `..`-prefixed / null-byte strings —
+it does not enforce the canonical-roots list or canonical-member
+resolution. The request-boundary `assertSafeToolPaths` guard already
+rejects every canonical projectPath that would escape the configured
+`PathPolicy` roots BEFORE the handler is called, so the runtime is not
+exposed to a fresh escape. This package proves the same contract is
+enforced *inside the handler body itself* by replacing the lexical
+boundary with `pathPolicy.assertProject(args.projectPath)` and
+returning a typed `isError: true` envelope (`Project path is outside
+the configured allowed roots: ...`) BEFORE any filesystem or
+subprocess call when the assertion throws. The canonical `projectRoot`
+is then used for `join(projectRoot, 'project.godot')`,
+`join(projectRoot, 'export_presets.cfg')`, the
+`existsSync` / `readFileSync` / `writeFileSync` calls, and the
+`Not a valid Godot project: ${projectRoot}` error message so the
+operator sees the resolved canonical path.
+
+The package has two coherent changes:
+
+1. **`src/server.ts`** — focused gate additions to the three handlers,
+   matching the sibling `core_file_io` / `manage_shader` /
+   `set_main_scene` / `manage_translations` / `script-resource-handler` /
+   `info-scene-settings-handler-injection` pattern exactly. Per-handler
+   shape:
+
+   - **`handleManageAutoloads`** — replaces lexical `validatePath` on
+     `args.projectPath` with `pathPolicy.assertProject(args.projectPath)`.
+     The canonical `projectRoot` is now used by `join(projectRoot,
+     'project.godot')`, `existsSync(projectFile)`,
+     `readFileSync(projectFile, 'utf8')`, `writeFileSync(projectFile,
+     content, 'utf8')`, and the `Not a valid Godot project` error message.
+     Every existing strict-input gate (strict identifier regex on `name`,
+     strict `res://` + relative-member gate on `path`, anchored per-line
+     `remove` regex) is preserved unchanged.
+   - **`handleManageInputMap`** — same shape: `assertProject` on
+     `args.projectPath`; the canonical `projectRoot` is used by
+     `join(projectRoot, 'project.godot')`, `existsSync(projectFile)`,
+     `readFileSync(projectFile, 'utf8')`,
+     `writeFileSync(projectFile, content, 'utf8')`, and the
+     `Not a valid Godot project` error message. Every existing
+     strict-input gate (strict identifier regex on `actionName`,
+     anchored per-line `remove` regex) is preserved unchanged.
+   - **`handleManageExportPresets`** — same shape: `assertProject` on
+     `args.projectPath`; the canonical `projectRoot` is used by
+     `join(projectRoot, 'project.godot')`,
+     `join(projectRoot, 'export_presets.cfg')`, `existsSync(projectFile)`,
+     `readFileSync(presetsFile, 'utf8')`,
+     `writeFileSync(presetsFile, content, 'utf8')`, and the
+     `Not a valid Godot project` error message. Every existing
+     strict-input gate (strict identifier regex on `name`, the
+     `/^[A-Za-z][A-Za-z0-9 _.\-/]*$/` allowlist on `platform`,
+     anchored `[preset.N]` `remove` regex) is preserved unchanged.
+
+   The diff is 50 insertions, 13 deletions across the three handlers.
+   The diff adds no new helper modules, no new tests outside the
+   focused test file, no schema changes, no handler signature changes,
+   no capability policy changes, no BridgeClient changes, and no
+   `validatePath` lexical helper changes.
+
+2. **`tests/manage-autoloads-input-map-export-presets-handler-injection.test.ts`**
+   (new, 6 tests) — exercises the real `GodotServer` + `PathPolicy` +
+   `CapabilityPolicy` + the private handler methods. Each test uses
+   a temporary Godot project under the OS temp directory, removed
+   in `afterEach`. The 6 tests cover:
+
+   - **`manage_autoloads`** (2 tests): `projectPath` outside the
+     configured allowed roots rejected for `list` AND for `add`.
+   - **`manage_input_map`** (2 tests): `projectPath` outside the
+     configured allowed roots rejected for `list` AND for `add`.
+   - **`manage_export_presets`** (2 tests): `projectPath` outside the
+     configured allowed roots rejected for `list` AND for `add`.
+
+   Every rejection asserts the canonical-root error message
+   (`outside the (configured )?allowed roots`) AND asserts the
+   `Not a valid Godot project` fallback is *absent*, so the gate is
+   proven to fire BEFORE any `existsSync(project.godot)` check.
+
+   The script invokes the private handler methods directly via
+   `(server as any).handleXxx(args)` (bypassing `tools/call`), the
+   same wiring pattern as
+   `tests/info-scene-settings-handler-injection.test.ts`, so the gate
+   exercises the live handler dispatch path, not a side-stepped import.
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every
+  handler, the 5 closed-list profiles, the package identity, the
+  path policy, the runtime bridge, and the MIT attribution;
+- does **not** touch `src/scripts/godot_operations.gd`,
+  `src/scripts/mcp_interaction_server.gd`, the tool registry, the
+  capability policy, the request limiter, the operation runner,
+  the BridgeClient, the upstream `bridge-installer.ts`, the sibling
+  `manage_layers` / `manage_plugins` / `manage_shader` /
+  `manage_ci_pipeline` / `manage_docker_export` / `set_main_scene` /
+  `manage_translations` gates, the `core_file_io` /
+  `script-resource-handler` / `info-scene-settings-handler-injection`
+  gates, `handleCreateCsharpScript`, `handleCreateProject`,
+  `handleRunProject` (the `args.scene` runtime CLI argument), or
+  `handleValidateScripts` (the inner-loop `rel` lexical boundary
+  carries documented semantic differences that defer its migration);
+- the only documented contract changes are that `args.projectPath`
+  MUST now resolve through the canonical `PathPolicy`, matching the
+  strict-input contract the sibling `core_file_io` / `manage_shader` /
+  `set_main_scene` / `manage_translations` / `script-resource-handler` /
+  `info-scene-settings-handler-injection` gates already enforce;
+- does not push, publish, create a PR/release, upload a package,
+  write `docs/maintainers/release-candidate.md`, or send the
+  candidate-ready notification.
+
+**Rationale for the four remaining deferred handlers:**
+
+- `handleRunProject` `args.scene` — runtime Godot CLI argument, not
+  a filesystem path under the project root.
+- `handleCreateProject` — the target path does not yet exist;
+  `assertProject` canonicalization requires an existing path. The
+  handler needs a separate `allowsProject` (rather than
+  `assertProject`) gate plus a downstream write-gate that prevents
+  the new path from leaking outside the configured allowed roots.
+- `handleCreateCsharpScript` — the new script path does not yet
+  exist; same canonicalization mismatch as `handleCreateProject`.
+  The C# gate from Coding-Solo#114 remains the primary gate for
+  this handler.
+- `handleValidateScripts` — already has `pathPolicy.assertProject`
+  on `args.projectPath` but carries a lexical `validatePath(rel)`
+  on the inner loop where `rel` is a relative path produced by
+  `listChangedGdFiles` / `listAllGdFiles`. The user-supplied
+  `args.scriptPaths` array additionally needs a
+  `resolveProjectMember` gate that is not currently applied; the
+  audit requires a separate test fixture because explicit user
+  input vs. internal-relative-path differs in contract.
+
+Source evidence:
+
+- `src/server.ts` is the only modified source file.
+- `tests/manage-autoloads-input-map-export-presets-handler-injection.test.ts`
+  is the only new test file (6 tests).
+- `docs/maintainers/issue-inventory.md` adds item 23 (the only docs
+  edit).
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/manage-autoloads-input-map-export-presets-handler-injection.test.ts`:
+  1 file, 6 tests passed (RED 6/6 confirmed before the fix; GREEN
+  6/6 after).
+- `npm test`: 45 files, 817 tests passed (was 811 before this
+  package; +6 new tests).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check HEAD~1..HEAD`: passed (only the standard
+  LF/CRLF warning, which is the expected Windows-native line-ending
+  notice and does not affect content).
+
+Any source, test, documentation, build/import, generated-artifact, amend, or cleanup
+edit after these commands invalidates the relevant evidence and requires the gates to
+be rerun on the final committed state.
+
+## Review state
+
+- The capability-policy package through `37facdf` has an independent
+  NeuralWatt `VERDICT | ACCEPT` with unchanged HEAD/status
+  fingerprints.
+- The network-classification package `79b1d4d` also has an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The round-trip contract package `cbfe594`, the tween-bridge
+  package `2ef0b1a`, the physics-frame `game_wait` package
+  `aff7ca1`, the C# / .NET gate package `ec07f4b`, the autoload
+  injection package `6d76606`, the asset-import-prerequisite
+  package (`88dda1e` / `76c9207`), the Defkil fork package identity
+  rebase `a1cae8b`, the manage-layers / manage-plugins
+  sibling-gate package `3874d81`, the set-main-scene /
+  manage-translations sibling-gate package `6407446`, the
+  manage_shader sibling-gate package `9cd5ac4`, the
+  manage_ci_pipeline / manage_docker_export sibling-gate package
+  `9eef5cd`, the core-file-IO defense-in-depth package
+  `b9fe537`, the script/resource handler defense-in-depth package
+  `383aae3`, the manage_input_map / manage_export_presets
+  sibling-gate package `dc6172e`, the info / scene / settings /
+  sprite / mesh-library / export PathPolicy gate package
+  `446964b`, and this manage_autoloads / manage_input_map /
+  manage_export_presets PathPolicy gate package are each a focused
+  test file (or test file + minimal handler edits) and do not
+  require an independent NeuralWatt dispatch.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.
+
+## Next safe action
+
+The next bounded package is to extend the canonical-root gate to the
+four remaining handlers that still carry a lexical boundary on a
+project-bearing path or member path:
+
+`handleRunProject` `args.scene` (runtime CLI argument, but if a
+canonical resolution becomes available it should adopt
+`pathPolicy.resolveProjectMember`), `handleCreateProject`
+(requires a non-existent-path gate), `handleCreateCsharpScript`
+(requires a non-existent-path gate plus the existing C# / .NET
+gate), and `handleValidateScripts` (inner-loop `rel` plus the
+user-supplied `args.scriptPaths` array). Each handler can be
+ported one at a time with a focused wire-level test mirroring
+`tests/manage-autoloads-input-map-export-presets-handler-injection.test.ts`.
+Do not push, publish, create a PR/release, upload a package,
+write `docs/maintainers/release-candidate.md`, or send the
+candidate-ready notification.
+
+
 
 ## Current package — modify→read round-trip contract for resource properties
 

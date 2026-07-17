@@ -277,3 +277,45 @@ Oliver explicitly approves the exact reviewed candidate.
     `handleRunProject` cleanup drops the redundant lexical boundary;
     no test exercises it because `pathPolicy.assertProject` already
     proves the same contract through every other port.
+
+
+23. The lexical-`validatePath` defense-in-depth gap persisted in three
+    sibling handlers whose strict-input gates (items 14, 15, 21) already
+    protect against content injection but whose `projectPath` boundary
+    still relied on the lexical-only check: `handleManageAutoloads`,
+    `handleManageInputMap`, and `handleManageExportPresets`. Each
+    handler historically opened with
+    `if (!validatePath(args.projectPath)) return createErrorResponse('Invalid path.');`
+    and then `join(args.projectPath, 'project.godot')`-ed the
+    user-supplied value into `existsSync` / `readFileSync` /
+    `writeFileSync`. The lexical `validatePath` only rejects empty /
+    `..`-prefixed / null-byte strings and does not enforce the
+    configured `PathPolicy` allowed roots. The request-boundary
+    `assertSafeToolPaths` guard already rejects every projectPath that
+    escapes the configured `PathPolicy` roots BEFORE the handler is
+    called, so the runtime is not exposed to a fresh escape. This
+    package proves the same contract is enforced *inside the handler
+    body itself* by replacing the lexical boundary with
+    `pathPolicy.assertProject(args.projectPath)` and returning a typed
+    `isError: true` envelope (`Project path is outside the configured
+    allowed roots: ...`) BEFORE any filesystem read or write. The
+    canonical `projectRoot` is then used for `join(projectRoot,
+    'project.godot')`, `join(projectRoot, 'export_presets.cfg')`, the
+    `existsSync` / `readFileSync` / `writeFileSync` calls, and the
+    `Not a valid Godot project: ${projectRoot}` error message so the
+    operator sees the resolved canonical path. The package preserves
+    every existing strict-input gate: `manage_autoloads` strict
+    identifier regex on `name`, strict `res://` + relative-member
+    gate on `path`, anchored per-line `remove` regex; `manage_input_map`
+    strict identifier regex on `actionName`; `manage_export_presets`
+    strict identifier regex on `name` plus the
+    `/^[A-Za-z][A-Za-z0-9 _.\-/]*$/` allowlist on `platform`. Wire-level
+    coverage in
+    `tests/manage-autoloads-input-map-export-presets-handler-injection.test.ts`
+    (6 tests): each handler rejects a `projectPath` outside the
+    configured allowed roots for both `list` and `add` actions; every
+    rejection surfaces the canonical-root error message and never the
+    `Not a valid Godot project` fallback. The tests invoke the private
+    handler methods directly via `(server as any).handleXxx(args)`
+    (bypassing `tools/call`) to prove the gate lives in the handler
+    body itself, not only in the request-boundary guard.
