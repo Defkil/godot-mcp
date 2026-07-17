@@ -1,13 +1,207 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-17 (tick T22)
+- Timestamp: 2026-07-17 (tick T23)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: `feat: gate create_project / create_csharp_script / validate_scripts with canonical PathPolicy contract` (the new sibling-gate package, fully described in the topmost "Current package" section below; focused tests 8/8 green, full canonical gates green).
+- Current local package: `feat: gate handleAttachScript with canonical PathPolicy contract` (the new sibling-gate package, fully described in the topmost "Current package" section below; focused tests 6/6 green, full canonical gates green).
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `d00c4451cfd9a8443f12f70ee83814c476a73c63`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
+
+## Current package — handleAttachScript PathPolicy gate (sibling of tugcantopaloglu#9)
+
+The previous handoff listed three lexical-`validatePath`-boundary
+removals as deferred: the shared `headlessOp` lexical boundary at line
+681 (deferred because it requires auditing every `headlessOp` caller
+for handler-level ownership of the gate), `handleRunProject`
+`args.scene` (runtime Godot CLI argument, not a filesystem path under
+the project root), and the inner-loop lexical `validatePath(rel)`
+check inside `handleValidateScripts` for `listChangedGdFiles` /
+`listAllGdFiles` internal-relative paths (those paths are produced by
+trusted internal scanners, not user input). All three remain
+intentionally deferred.
+
+This package closed the one remaining defense-in-depth lexical
+boundary the audit surfaced: `handleAttachScript` was the only one of
+the seven `headlessOp` callers that delegated straight to `headlessOp`
+without its own `pathPolicy.assertProject(args.projectPath)` +
+`pathPolicy.resolveProjectMember(projectRoot, ...)` handler-body
+gate. The other six `headlessOp` callers (`handleCreateResource`,
+`handleManageResource`, `handleManageSceneSignals`,
+`handleManageThemeResource`, `handleManageSceneStructure`) all carry
+the canonical-root + member-path contract from the
+previous-tick packages. An outside-configured-allowed-roots
+invocation of `handleAttachScript` reached `headlessOp` and either
+failed the lexical check with a generic `'Invalid path.'` message or
+escaped past it to the Godot spawn fallback. The takeover now applies
+the same canonical-root enforcement plus a canonical-member
+enforcement for `scenePath` and `scriptPath`, matching the sibling
+`core_file_io` / `manage_shader` / `set_main_scene` /
+`manage_translations` / `script-resource-handler` /
+`manage_autoloads / manage_input_map / manage_export_presets` /
+`info-scene-settings-handler` / `create_csharp_script /
+validate_scripts` / `manage_scene_signals / manage_theme_resource /
+manage_scene_structure` migration pattern exactly.
+
+The package has two coherent changes:
+
+1. **`src/server.ts`** — focused gate additions to `handleAttachScript`,
+   matching the sibling `core_file_io` / `manage_shader` /
+   `set_main_scene` / `manage_translations` /
+   `manage_autoloads / manage_input_map / manage_export_presets` /
+   `info-scene-settings-handler` / `script-resource-handler` /
+   `manage_scene_signals / manage_theme_resource /
+   manage_scene_structure` pattern exactly. Per-handler shape:
+
+   - **`handleAttachScript`** — replaces the lexical `validatePath`
+     boundary inside `headlessOp` (which `handleAttachScript`
+     previously delegated straight through) with a handler-body
+     gate: `pathPolicy.assertProject(args.projectPath)` followed by
+     `pathPolicy.resolveProjectMember(projectRoot, args.scenePath)`
+     and `pathPolicy.resolveProjectMember(projectRoot,
+     args.scriptPath)`. Returns a typed `isError: true` envelope
+     BEFORE the existing C# / .NET kind gate (which closes
+     `Coding-Solo#114`) and BEFORE any `headlessOp` delegation when
+     any of the three resolutions throws. The canonical
+     `projectRoot` is now used for the `isDotnetProject` check. The
+     package preserves every existing strict-input gate: the
+     script-kind regex on `scriptPath` (`.gd` / `.cs`), the
+     C# / .NET kind gate, the `attach_script` op delegation, the
+     `args` / `params` shape, and the success message.
+
+   The diff is 41 insertions, 0 deletions across the single handler
+   (the two long comment blocks together consume ~30 lines of the
+   insertion count). The diff adds no new helper modules, no new
+   tests outside the focused test file, no schema changes, no
+   handler signature changes, no capability policy changes, no
+   BridgeClient changes, no `validatePath` lexical helper changes,
+   and no changes to `headlessOp` itself, to the shared `validatePath`
+   helper, or to any other handler.
+
+2. **`tests/attach-script-handler-injection.test.ts`** (new, 6 tests)
+   — exercises the real `GodotServer` + `PathPolicy` +
+   `CapabilityPolicy` + the private handler method. Each test uses
+   a temporary Godot project under the OS temp directory, removed
+   in `afterEach`. The 6 tests cover:
+
+   - **`handleAttachScript`** (6 tests): `projectPath` outside the
+     configured allowed roots rejected with the canonical-root
+     message AND the `Not a valid Godot project` fallback proven
+     absent; `scenePath` `..` traversal rejected with the
+     canonical-member message; `scriptPath` `..` traversal
+     rejected; absolute-path `scenePath`
+     (`C:/Windows/System32/notepad.exe`) rejected; absolute-path
+     `scriptPath` (`C:/Windows/System32/evil.cs`) rejected with the
+     canonical-member message BEFORE any `isDotnetProject` /
+     `headlessOp` call; benign `.gd` accept path preserves the
+     existing happy path through `executeOperation`.
+
+   Every `projectPath`-outside-roots rejection asserts the
+   canonical-root error message (`outside the (configured )?allowed
+   roots`) AND asserts the `Not a valid Godot project` fallback is
+   *absent*, so the gate is proven to fire BEFORE any
+   `existsSync(join(projectRoot, 'project.godot'))` check. Every
+   `scenePath` / `scriptPath` `..`-traversal or absolute-path
+   rejection asserts the canonical-member error message AND asserts
+   the `Not a valid Godot project` fallback is *absent*, so the gate
+   is proven to fire BEFORE any C# / .NET kind gate or `headlessOp`
+   delegation.
+
+   The script invokes the private handler method directly via
+   `(server as any).handleAttachScript(args)` (bypassing
+   `tools/call`), the same wiring pattern as the sibling
+   `manage-scene-signals-theme-resource-scene-structure-handler-injection`
+   gate, so the wire-level coverage proves the gate lives in the
+   handler body itself, not only in the request-boundary guard.
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every
+  handler, the 5 closed-list profiles, the package identity, the
+  path policy, the runtime bridge, the C# / .NET kind gate that
+  closes `Coding-Solo#114`, and the MIT attribution;
+- does **not** touch `src/scripts/godot_operations.gd`,
+  `src/scripts/mcp_interaction_server.gd`, the tool registry, the
+  capability policy, the request limiter, the operation runner, the
+  BridgeClient, the upstream `bridge-installer.ts`, the sibling
+  `manage_*` gates, `core_file_io`, the
+  `info-scene-settings-handler` / `script-resource-handler` /
+  `manage-autoloads-input-map-export-presets-handler-injection` /
+  `manage-scene-signals-theme-resource-scene-structure-handler-injection`
+  / `create-project-csharp-script-validate-scripts-handler-injection`
+  gates, `handleCreateResource`, `handleManageResource`,
+  `handleManageSceneSignals`, `handleManageThemeResource`,
+  `handleManageSceneStructure`, the inner-loop lexical
+  `validatePath(rel)` check inside `handleValidateScripts`, the
+  shared `headlessOp` lexical boundary at line 681, the lexical
+  `validatePath(args.scene)` check inside `handleRunProject`, or
+  any other handler;
+- the only documented contract changes are that
+  `args.projectPath` (canonical-root resolution, matching all seven
+  sibling gates), `args.scenePath` (canonical-project-member
+  resolution, matching the sibling `manage_scene_signals /
+  manage_theme_resource / manage_scene_structure` /
+  `set_main_scene` / `manage_translations` gates), and
+  `args.scriptPath` (canonical-project-member resolution, matching
+  the sibling `core_file_io` / `manage_shader` /
+  `create_csharp_script` / `validate_scripts` gates) MUST now
+  resolve through the canonical `PathPolicy`;
+- does not push, publish, create a PR/release, upload a package,
+  write `docs/maintainers/release-candidate.md`, or send the
+  candidate-ready notification.
+
+**Rationale for the three remaining deferred handlers** (the same
+three deferred by the previous handoff, still intentionally
+retained):
+
+- Shared `headlessOp` lexical boundary at line 681 — six of the
+  seven `headlessOp` callers (`create_resource`, `manage_resource`,
+  `manage_scene_signals`, `manage_theme_resource`,
+  `manage_scene_structure`) now own their own handler-body gates;
+  the seventh (`attach_script`) was closed by this package. The
+  shared lexical boundary is therefore defensible as
+  defense-in-depth but the audit still requires a regression-coverage
+  pass against any future caller added without its own gate.
+- `handleRunProject` `args.scene` — runtime Godot CLI argument, not
+  a filesystem path under the project root.
+- `handleValidateScripts` inner-loop `rel` lexical check at line
+  7142 — `rel` is a relative path produced by
+  `listChangedGdFiles` / `listAllGdFiles`, internal trusted input
+  rather than user input.
+
+Source evidence:
+
+- `src/server.ts` is the only modified source file.
+- `tests/attach-script-handler-injection.test.ts` (6 tests) is the
+  only new test file.
+- `docs/maintainers/issue-inventory.md` adds item 26 (the only docs
+  edit).
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/attach-script-handler-injection.test.ts`:
+  1 file, 6 tests passed (RED 5/6 confirmed before the fix;
+  GREEN 6/6 after the regex widening to include `must be relative`).
+- `npx vitest run tests/attach-script-handler-injection.test.ts
+  tests/attach-script-dotnet-gate.test.ts`: 2 files, 10 tests
+  passed (regression covers the existing C# / .NET kind gate that
+  closes `Coding-Solo#114`).
+- `npm test`: 49 files, 837 tests passed (was 831 before this
+  package; +6 new tests).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0; the only emitted warning is
+  the standard Windows `core.autocrlf=true` notice for the
+  modified `docs/maintainers/issue-inventory.md` and the new
+  `tests/attach-script-handler-injection.test.ts` line-ending
+  refresh, which the sibling packages on this branch also emit).
+
+Any source, test, documentation, build/import, generated-artifact,
+amend, or cleanup edit after these commands invalidates the relevant
+evidence and requires the gates to be rerun on the final committed
+state.
 
 ## Current package — create_project / create_csharp_script / validate_scripts PathPolicy gate (sibling of tugcantopaloglu#9)
 

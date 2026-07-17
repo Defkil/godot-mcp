@@ -5301,6 +5301,47 @@ export class GodotServer {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.scenePath || !args.nodePath || !args.scriptPath)
       return createErrorResponse('projectPath, scenePath, nodePath, and scriptPath are required.');
+    // Canonical-root gate (matches the sibling `core_file_io` /
+    // `manage_shader` / `set_main_scene` / `manage_translations` /
+    // `manage_autoloads / manage_input_map / manage_export_presets` /
+    // `info-scene-settings-handler` / `script-resource-handler` /
+    // `create_project / create_csharp_script / validate_scripts` /
+    // `manage_scene_signals / manage_theme_resource /
+    // manage_scene_structure` migration): the lexical `validatePath`
+    // boundary inside `headlessOp` only rejects empty / `..` / null-byte
+    // strings and does not enforce the configured `PathPolicy` allowed
+    // roots. Resolve the project through `pathPolicy.assertProject`
+    // BEFORE any filesystem read or `headlessOp` delegation so a caller
+    // can never reach `isDotnetProject(args.projectPath)` /
+    // `headlessOp` with a `projectPath` that escapes the configured
+    // allowed roots.
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+    }
+    // Canonical-member gate (matches the sibling `core_file_io` /
+    // `manage_shader` / `set_main_scene` / `manage_translations` /
+    // `script-resource-handler` / `create_csharp_script / validate_scripts` /
+    // `manage_scene_signals / manage_theme_resource /
+    // manage_scene_structure` migration): the lexical `validatePath`
+    // boundary inside `headlessOp` only rejects empty / `..` / null-byte
+    // strings and lets absolute paths through. Resolve `scenePath` and
+    // `scriptPath` through `pathPolicy.resolveProjectMember` BEFORE the
+    // C# / .NET kind gate and BEFORE any `headlessOp` delegation so a
+    // caller can never reach the GDScript `attach_script` op with a
+    // member path that escapes the project root.
+    try {
+      this.pathPolicy.resolveProjectMember(projectRoot, args.scenePath);
+    } catch (error: any) {
+      return createErrorResponse(`Invalid scenePath: ${error?.message ?? 'rejected by path policy.'}`);
+    }
+    try {
+      this.pathPolicy.resolveProjectMember(projectRoot, args.scriptPath);
+    } catch (error: any) {
+      return createErrorResponse(`Invalid scriptPath: ${error?.message ?? 'rejected by path policy.'}`);
+    }
     // Script-kind / project-kind gate (closes Coding-Solo#114). The matching
     // create_csharp_script handler already rejects .cs scripts on a non-.NET
     // project; attach_script silently forwarded every script path to the

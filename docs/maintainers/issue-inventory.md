@@ -483,3 +483,60 @@ Oliver explicitly approves the exact reviewed candidate.
     `handleValidateScripts` for `listChangedGdFiles` /
     `listAllGdFiles` internal-relative paths (deferred because those
     paths are produced by trusted internal scanners, not user input).
+
+26. The `handleAttachScript` defense-in-depth gate was the last sibling
+    handler that delegated straight to `headlessOp` without a
+    handler-body PathPolicy contract. The handler historically opened
+    only with the script-kind / project-kind gate (closes
+    `Coding-Solo#114`) and then `delegate`-d to `headlessOp`, which
+    opens with a single
+    `if (!validatePath(projectPath)) return createErrorResponse('Invalid path.');`
+    lexical check. Of the seven `headlessOp` callers
+    (`attach_script`, `create_resource`, `manage_resource`,
+    `manage_scene_signals`, `manage_theme_resource`,
+    `manage_scene_structure`), six already own a handler-body
+    `pathPolicy.assertProject(args.projectPath)` + optional
+    `pathPolicy.resolveProjectMember(projectRoot, ...)` gate that
+    returns a typed `isError: true` envelope BEFORE any `headlessOp`
+    delegation; only `handleAttachScript` did not. An
+    outside-configured-allowed-roots invocation then reached
+    `headlessOp` and either failed the lexical check with a generic
+    `'Invalid path.'` message or escaped past it to the Godot spawn
+    fallback. The takeover now applies the same canonical-root
+    enforcement (`pathPolicy.assertProject(args.projectPath)` replaces
+    lexical `validatePath`) plus a canonical-member enforcement for
+    `scenePath` and `scriptPath` (`pathPolicy.resolveProjectMember
+    (projectRoot, args.<member>)`) so a caller can never reach the
+    C# / .NET kind gate or `headlessOp` with a member path that
+    escapes the project root. The package preserves the existing
+    script-kind / project-kind gate and the C# / .NET kind gate in
+    their original order; the new gates fire strictly BEFORE both.
+    Wire-level coverage in `tests/attach-script-handler-injection.test.ts`
+    (6 tests): `projectPath` outside the configured allowed roots
+    rejected with the canonical-root message AND the
+    `Not a valid Godot project` fallback proven absent; `scenePath`
+    `..` traversal rejected with the canonical-member message; `scriptPath`
+    `..` traversal rejected with the canonical-member message;
+    absolute-path `scenePath` (`C:/Windows/System32/notepad.exe`)
+    rejected with the canonical-member message; absolute-path
+    `scriptPath` rejected with the canonical-member message BEFORE any
+    `isDotnetProject` / `headlessOp` call; benign `.gd` accept path
+    preserves the existing happy path. The tests invoke the private
+    handler method directly via `(server as any).handleAttachScript(args)`
+    (bypassing `tools/call`), the same wiring pattern as the sibling
+    `manage-scene-signals-theme-resource-scene-structure-handler-injection`
+    gate, so the wire-level coverage proves the gate lives in the
+    handler body itself, not only in the request-boundary guard.
+
+    The remaining deferred handlers from this package's "next safe
+    action" list are the original three: the shared `headlessOp`
+    lexical boundary at line 681 (now defensible defense-in-depth
+    because all six remaining handlers own their own gates, but not
+    removed in this branch because the audit still requires a
+    regression-coverage pass against any future caller added without
+    its own gate); `handleRunProject` `args.scene` (runtime Godot CLI
+    argument, not a filesystem path under the project root); and the
+    inner-loop lexical `validatePath(rel)` check inside
+    `handleValidateScripts` for `listChangedGdFiles` /
+    `listAllGdFiles` internal-relative paths (deferred because those
+    paths are produced by trusted internal scanners, not user input).
