@@ -1,13 +1,220 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-17 (tick T20)
+- Timestamp: 2026-07-17 (tick T21)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: `feat: gate manage_autoloads / manage_input_map / manage_export_presets with canonical PathPolicy contract` (the new sibling-gate package, fully described in the topmost "Current package" section below; focused tests 6/6 green, full canonical gates green).
+- Current local package: `feat: gate manage_scene_signals / manage_theme_resource / manage_scene_structure with canonical PathPolicy contract` (the new sibling-gate package, fully described in the topmost "Current package" section below; focused tests 6/6 green, full canonical gates green).
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `d00c4451cfd9a8443f12f70ee83814c476a73c63`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
+
+## Current package — manage_scene_signals / manage_theme_resource / manage_scene_structure PathPolicy gate (sibling of tugcantopaloglu#9)
+
+The previous handoff listed seven remaining lexical-`validatePath`-gated
+handlers as the next bounded package. Three of those
+(`handleManageSceneSignals`, `handleManageThemeResource`,
+`handleManageSceneStructure`) carry no semantic difference from the
+`info / scene / settings / sprite / mesh-library / export` and
+`manage_autoloads / manage_input_map / manage_export_presets` migration
+patterns that landed in commits `446964b` and `571ef14`; the other four
+(`handleCreateProject`, `handleCreateCsharpScript`,
+`handleValidateScripts`, plus the `handleRunProject` `args.scene` runtime
+CLI argument) carry documented semantic differences that defer their
+migration. This package closes the three simple project-only gates in
+one cohesive commit.
+
+Each migrated handler historically delegated straight to the shared
+`headlessOp` helper, which opens with
+`if (!validatePath(projectPath)) return createErrorResponse('Invalid path.');`
+and then `join(projectPath, 'project.godot')`-ed the user-supplied value
+into `existsSync` / `readFileSync` / `writeFileSync`. The lexical
+`validatePath` only rejects empty / `..`-prefixed / null-byte strings —
+it does not enforce the canonical-roots list or canonical-member
+resolution. The request-boundary `assertSafeToolPaths` guard already
+rejects every canonical projectPath / memberPath that would escape the
+configured `PathPolicy` roots BEFORE the handler is called, so the
+runtime is not exposed to a fresh escape. This package proves the same
+contract is enforced *inside the handler body itself* by replacing the
+lexical boundary with `pathPolicy.assertProject(args.projectPath)` +
+`pathPolicy.resolveProjectMember(projectRoot, args.scenePath | args.resourcePath)`
+and returning a typed `isError: true` envelope (`Project path is outside
+the configured allowed roots: ...` / `Invalid scenePath: Project member
+path cannot traverse outside the project root.`) BEFORE any `headlessOp`
+delegation when either resolution throws. The shared `headlessOp`
+lexical boundary remains in place as redundant defense-in-depth and is
+the next-follow-up refactor target (deferred because it requires
+auditing every `headlessOp` caller for handler-level ownership of the
+gate — `attach_script` / `create_resource` / `manage_resource` already
+own their own gates, while the three handlers closed in this package
+were the remaining unguarded delegation paths).
+
+The package has two coherent changes:
+
+1. **`src/server.ts`** — focused gate additions to the three handlers,
+   matching the sibling `core_file_io` / `manage_shader` /
+   `set_main_scene` / `manage_translations` /
+   `manage_autoloads / manage_input_map / manage_export_presets` /
+   `manage_layers / manage_plugins` / `info-scene-settings-handler` /
+   `script-resource-handler` pattern exactly. Per-handler shape:
+
+   - **`handleManageSceneSignals`** — replaces the inherited delegation
+     to `headlessOp` with a handler-body gate:
+     `pathPolicy.assertProject(args.projectPath)` followed by
+     `pathPolicy.resolveProjectMember(projectRoot, args.scenePath)`.
+     Returns a typed `isError: true` envelope BEFORE any `headlessOp`
+     delegation when either resolution throws. The original `headlessOp`
+     delegation, the `args` / `params` shape, the optional `signalName`
+     / `sourcePath` / `targetPath` / `method` parameters, and the strict
+     required-field gate (`projectPath`, `scenePath`, `action`) are all
+     preserved unchanged.
+   - **`handleManageThemeResource`** — same shape:
+     `assertProject(args.projectPath)` followed by
+     `resolveProjectMember(projectRoot, args.resourcePath)`. The
+     `headlessOp` delegation, the `resourcePath` / `action` / optional
+     `properties` params shape, and the strict required-field gate
+     (`projectPath`, `resourcePath`, `action`) are preserved unchanged.
+   - **`handleManageSceneStructure`** — same shape:
+     `assertProject(args.projectPath)` followed by
+     `resolveProjectMember(projectRoot, args.scenePath)`. The
+     `headlessOp` delegation, the `scenePath` / `action` / `nodePath` /
+     optional `newName` / `newParentPath` params shape, and the strict
+     required-field gate (`projectPath`, `scenePath`, `action`,
+     `nodePath`) are preserved unchanged.
+
+   The diff is 66 insertions, 0 deletions across the three handlers.
+   The diff adds no new helper modules, no new tests outside the
+   focused test file, no schema changes, no handler signature changes,
+   no capability policy changes, no BridgeClient changes, no `validatePath`
+   lexical helper changes, and no changes to `headlessOp` itself.
+
+2. **`tests/manage-scene-signals-theme-resource-scene-structure-handler-injection.test.ts`**
+   (new, 6 tests) — exercises the real `GodotServer` + `PathPolicy` +
+   `CapabilityPolicy` + the private handler methods. Each test uses
+   a temporary Godot project under the OS temp directory, removed
+   in `afterEach`. The 6 tests cover:
+
+   - **`manage_scene_signals`** (2 tests): `projectPath` outside the
+     configured allowed roots rejected for `list`; `scenePath` whose
+     canonical realpath would escape the project root via `..` traversal
+     rejected with a member-path error.
+   - **`manage_theme_resource`** (2 tests): `projectPath` outside the
+     configured allowed roots rejected for `read`; `resourcePath` whose
+     canonical realpath would escape the project root via `..`
+     traversal rejected with a member-path error.
+   - **`manage_scene_structure`** (2 tests): `projectPath` outside the
+     configured allowed roots rejected for `list`; `scenePath` whose
+     canonical realpath would escape the project root via `..`
+     traversal rejected with a member-path error.
+
+   Every `projectPath`-outside-roots rejection asserts the
+   canonical-root error message (`outside the (configured )?allowed
+   roots`) AND asserts the `Not a valid Godot project` fallback is
+   *absent*, so the gate is proven to fire BEFORE any
+   `existsSync(project.godot)` check. Every `scenePath` / `resourcePath`
+   `..`-traversal rejection asserts the canonical-member error message
+   (`cannot traverse outside the project root`) AND asserts the
+   `Godot failed to start` spawn fallback is *absent*, so the gate is
+   proven to fire BEFORE any `headlessOp` delegation.
+
+   The script invokes the private handler methods directly via
+   `(server as any).handleXxx(args)` (bypassing `tools/call`), the
+   same wiring pattern as
+   `tests/info-scene-settings-handler-injection.test.ts`, so the gate
+   exercises the live handler dispatch path, not a side-stepped import.
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every
+  handler, the 5 closed-list profiles, the package identity, the
+  path policy, the runtime bridge, and the MIT attribution;
+- does **not** touch `src/scripts/godot_operations.gd`,
+  `src/scripts/mcp_interaction_server.gd`, the tool registry, the
+  capability policy, the request limiter, the operation runner,
+  the BridgeClient, the upstream `bridge-installer.ts`, the sibling
+  `manage_*` gates, `handleCreateCsharpScript`,
+  `handleCreateProject`, `handleManageAutoloads`,
+  `handleManageInputMap`, `handleManageExportPresets`,
+  `handleValidateScripts`, `handleAttachScript`, the shared
+  `headlessOp` lexical boundary, or any other handler;
+- the only documented contract changes are that `args.projectPath`
+  MUST now resolve through the canonical `PathPolicy` and that
+  `args.scenePath` / `args.resourcePath` MUST now resolve through
+  `pathPolicy.resolveProjectMember`, matching the strict-input
+  contract the sibling `core_file_io` / `manage_shader` /
+  `set_main_scene` / `manage_translations` /
+  `manage_autoloads / manage_input_map / manage_export_presets` /
+  `manage_layers / manage_plugins` / `info-scene-settings-handler` /
+  `script-resource-handler` gates already enforce;
+- does not push, publish, create a PR/release, upload a package,
+  write `docs/maintainers/release-candidate.md`, or send the
+  candidate-ready notification.
+
+**Rationale for the four deferred handlers:**
+
+- `handleRunProject` `args.scene` — runtime Godot CLI argument, not
+  a filesystem path under the project root.
+- `handleCreateProject` — the target path does not yet exist;
+  `assertProject` canonicalization requires an existing path. The
+  handler needs a separate `allowsProject` (rather than
+  `assertProject`) gate plus a downstream write-gate that prevents
+  the new path from leaking outside the configured allowed roots.
+- `handleCreateCsharpScript` — the new script path does not yet
+  exist; same canonicalization mismatch as `handleCreateProject`.
+  The C# gate from Coding-Solo#114 remains the primary gate for
+  this handler.
+- `handleValidateScripts` — carries the same lexical boundary on
+  `rel` (a relative path produced by `listChangedGdFiles` /
+  `listAllGdFiles`) and needs a separate audit because explicit
+  `args.scriptPaths` user input requires a `resolveProjectMember`
+  gate that is not currently applied. The inner-loop lexical
+  `validatePath(rel)` check at line 7062 is the next layer of
+  defense and needs the same canonical-member migration.
+
+Source evidence:
+
+- `src/server.ts` is the only modified source file.
+- `tests/manage-scene-signals-theme-resource-scene-structure-handler-injection.test.ts`
+  is the only new test file (6 tests).
+- `docs/maintainers/issue-inventory.md` item 24 is the only docs
+  edit.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/manage-scene-signals-theme-resource-scene-structure-handler-injection.test.ts`:
+  1 file, 6 tests passed (RED 6/6 confirmed before the fix;
+  GREEN 6/6 after).
+- `npm test`: 46 files, 823 tests passed (was 817 before this
+  package; +6 new tests).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0; the only emitted warning is
+  the standard Windows `core.autocrlf=true` notice for the
+  modified `src/server.ts` and `docs/maintainers/issue-inventory.md`
+  line-ending refresh, which the sibling packages on this branch
+  also emit).
+
+Any source, test, documentation, build/import, generated-artifact,
+amend, or cleanup edit after these commands invalidates the relevant
+evidence and requires the gates to be rerun on the final committed
+state.
+
+## Previous package — manage_autoloads / manage_input_map / manage_export_presets PathPolicy gate (sibling of tugcantopaloglu#9)
+
+(For history; superseded by the current package above. Retained so the
+diff between the two adjacent sibling-gate packages remains auditable.)
+
+The previous handoff listed the seven remaining lexical-`validatePath`-gated
+file-mutation handlers as the next bounded package. Three of those
+(`handleManageAutoloads`, `handleManageInputMap`, `handleManageExportPresets`)
+carry no semantic difference from the `info / scene / settings / sprite /
+mesh-library / export` migration pattern that landed in commit `446964b`;
+the other four (`handleCreateProject`, `handleCreateCsharpScript`,
+`handleValidateScripts`, plus the `handleRunProject` `args.scene` runtime
+CLI argument) carry documented semantic differences that defer their
+migration. This package closes the three simple project-only gates in
+one cohesive commit.
 
 ## Current package — manage_autoloads / manage_input_map / manage_export_presets PathPolicy gate (sibling of tugcantopaloglu#9)
 

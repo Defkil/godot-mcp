@@ -319,3 +319,42 @@ Oliver explicitly approves the exact reviewed candidate.
     handler methods directly via `(server as any).handleXxx(args)`
     (bypassing `tools/call`) to prove the gate lives in the handler
     body itself, not only in the request-boundary guard.
+
+24. The lexical-`validatePath` defense-in-depth gap persisted in three
+    sibling handlers that delegate straight to the shared `headlessOp`
+    helper without their own PathPolicy gate: `handleManageSceneSignals`,
+    `handleManageThemeResource`, and `handleManageSceneStructure`. Each
+    handler historically delegated to `headlessOp`, which opens with
+    `if (!validatePath(projectPath)) return createErrorResponse('Invalid path.');`
+    and then `join(projectPath, 'project.godot')`-ed the user-supplied
+    value into `existsSync`. The lexical `validatePath` only rejects
+    empty / `..`-prefixed / null-byte strings and does not enforce the
+    configured `PathPolicy` allowed roots. The shared helper also
+    forwards `args.scenePath` / `args.resourcePath` verbatim to the
+    Godot headless operation as `res://` paths (with an auto-prepend
+    fallback in the GDScript side), so a caller could pass
+    `scenePath = 'res://../etc/passwd'` or an absolute path and bypass
+    the canonical-project-member contract entirely. The takeover now
+    applies the same `pathPolicy.assertProject(args.projectPath)` +
+    `pathPolicy.resolveProjectMember(projectRoot, args.scenePath | args.resourcePath)`
+    pattern the sibling `core_file_io` / `manage_shader` /
+    `set_main_scene` / `manage_translations` / `manage_autoloads` /
+    `manage_input_map` / `manage_export_presets` / `manage_layers` /
+    `manage_plugins` / `info-scene-settings-handler` /
+    `script-resource-handler` gates already use, returning a typed
+    `isError: true` envelope BEFORE any `headlessOp` delegation when
+    either resolution throws. The shared `headlessOp` lexical
+    boundary remains in place as redundant defense-in-depth and is the
+    next-follow-up refactor target (deferred because it requires
+    auditing every `headlessOp` caller for handler-level ownership of
+    the gate). Wire-level coverage in
+    `tests/manage-scene-signals-theme-resource-scene-structure-handler-injection.test.ts`
+    (6 tests): each handler rejects a `projectPath` outside the
+    configured allowed roots AND rejects a `scenePath` / `resourcePath`
+    whose canonical realpath would escape the project root via `..`
+    traversal. Every rejection surfaces the canonical-root /
+    canonical-member error message and never the `Not a valid Godot
+    project` fallback or a Godot spawn error. The tests invoke the
+    private handler methods directly via `(server as any).handleXxx(args)`
+    (bypassing `tools/call`) to prove the gate lives in the handler
+    body itself, not only in the request-boundary guard.

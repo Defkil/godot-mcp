@@ -7150,6 +7150,28 @@ export class GodotServer {
   private async handleManageSceneSignals(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.scenePath || !args.action) return createErrorResponse('projectPath, scenePath, and action are required.');
+    // Resolve the project root through the request-boundary PathPolicy
+    // (replaces lexical `validatePath` with canonical-root enforcement,
+    // matching the sibling `core_file_io` / `manage_shader` /
+    // `set_main_scene` / `manage_translations` / `manage_autoloads` /
+    // `manage_input_map` / `manage_export_presets` / `manage_shader` /
+    // `manage_layers` / `manage_plugins` / `info-scene-settings-handler` /
+    // `script-resource-handler` gates).
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+    }
+    // Resolve scenePath through the same PathPolicy that gates the sibling
+    // handlers, so `..` segments and absolute-path bypasses cannot escape
+    // the project root even if the lexical `validatePath` boundary were
+    // ever removed.
+    try {
+      this.pathPolicy.resolveProjectMember(projectRoot, args.scenePath);
+    } catch (error: any) {
+      return createErrorResponse(`Invalid scenePath: ${error?.message ?? 'rejected by path policy.'}`);
+    }
     return this.headlessOp('manage_scene_signals', args, a => ({
       projectPath: a.projectPath,
       params: {
@@ -7357,6 +7379,28 @@ export class GodotServer {
   private async handleManageThemeResource(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.resourcePath || !args.action) return createErrorResponse('projectPath, resourcePath, and action are required.');
+    // Resolve the project root through the request-boundary PathPolicy
+    // (replaces lexical `validatePath` with canonical-root enforcement,
+    // matching the sibling `core_file_io` / `manage_shader` /
+    // `set_main_scene` / `manage_translations` / `manage_autoloads` /
+    // `manage_input_map` / `manage_export_presets` / `manage_shader` /
+    // `manage_layers` / `manage_plugins` / `info-scene-settings-handler` /
+    // `script-resource-handler` gates).
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+    }
+    // Resolve resourcePath through the same PathPolicy that gates the sibling
+    // handlers, so `..` segments and absolute-path bypasses cannot escape
+    // the project root even if the lexical `validatePath` boundary were
+    // ever removed.
+    try {
+      this.pathPolicy.resolveProjectMember(projectRoot, args.resourcePath);
+    } catch (error: any) {
+      return createErrorResponse(`Invalid resourcePath: ${error?.message ?? 'rejected by path policy.'}`);
+    }
     return this.headlessOp('manage_theme_resource', args, a => ({
       projectPath: a.projectPath,
       params: { resourcePath: a.resourcePath, action: a.action, ...(a.properties ? { properties: a.properties } : {}) },
@@ -7403,6 +7447,28 @@ export class GodotServer {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.scenePath || !args.action || !args.nodePath)
       return createErrorResponse('projectPath, scenePath, action, and nodePath are required.');
+    // Resolve the project root through the request-boundary PathPolicy
+    // (replaces lexical `validatePath` with canonical-root enforcement,
+    // matching the sibling `core_file_io` / `manage_shader` /
+    // `set_main_scene` / `manage_translations` / `manage_autoloads` /
+    // `manage_input_map` / `manage_export_presets` / `manage_shader` /
+    // `manage_layers` / `manage_plugins` / `info-scene-settings-handler` /
+    // `script-resource-handler` gates).
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+    }
+    // Resolve scenePath through the same PathPolicy that gates the sibling
+    // handlers, so `..` segments and absolute-path bypasses cannot escape
+    // the project root even if the lexical `validatePath` boundary were
+    // ever removed.
+    try {
+      this.pathPolicy.resolveProjectMember(projectRoot, args.scenePath);
+    } catch (error: any) {
+      return createErrorResponse(`Invalid scenePath: ${error?.message ?? 'rejected by path policy.'}`);
+    }
     return this.headlessOp('manage_scene_structure', args, a => ({
       projectPath: a.projectPath,
       params: {
