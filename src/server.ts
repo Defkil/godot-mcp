@@ -5585,15 +5585,38 @@ export class GodotServer {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.projectName)
       return createErrorResponse('projectPath and projectName are required.');
-    if (!validatePath(args.projectPath))
-      return createErrorResponse('Invalid path.');
+    // Canonical-root gate (matches the sibling `manage_autoloads /
+    // manage_input_map / manage_export_presets` / `core_file_io` /
+    // `manage_shader` / `set_main_scene` / `manage_translations` /
+    // `info-scene-settings` / `script-resource-handler` /
+    // `manage_scene_signals / manage_theme_resource /
+    // manage_scene_structure` migration): the lexical `validatePath`
+    // boundary only rejects empty / `..` / null-byte strings and does
+    // not enforce the configured `PathPolicy` allowed roots. Resolve
+    // the project through `pathPolicy.assertProject` BEFORE any
+    // filesystem read or write so a caller can never reach
+    // `mkdirSync` / `writeFileSync` with a path that escapes the
+    // configured allowed roots.
+    //
+    // `handleCreateProject` is the only sibling handler whose target
+    // `args.projectPath` legitimately does not yet exist on disk;
+    // `pathPolicy.canonicalizeNearest` walks up to the nearest existing
+    // ancestor and prefixes the new segments, so `assertProject`
+    // canonicalizes a fresh path without losing the canonical-root
+    // contract.
+    let projectRoot: string;
     try {
-      if (!existsSync(args.projectPath)) {
-        mkdirSync(args.projectPath, { recursive: true });
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+    }
+    try {
+      if (!existsSync(projectRoot)) {
+        mkdirSync(projectRoot, { recursive: true });
       }
-      const projectFile = join(args.projectPath, 'project.godot');
+      const projectFile = join(projectRoot, 'project.godot');
       if (existsSync(projectFile))
-        return createErrorResponse('A project.godot already exists at this path.');
+        return createErrorResponse(`A project.godot already exists at this path: ${projectRoot}`);
       const isDotnet = args.dotnet === true;
       const assemblyName = toDotnetIdentifier(args.projectName);
       const features = generateGodotProjectFeatures(isDotnet);
@@ -5604,9 +5627,9 @@ export class GodotServer {
       writeFileSync(projectFile, content, 'utf8');
       if (isDotnet) {
         const sdkVersion = (await this.detectGodotNetSdkVersion()) ?? undefined;
-        writeFileSync(join(args.projectPath, `${assemblyName}.csproj`), generateCsprojContent(args.projectName, sdkVersion), 'utf8');
+        writeFileSync(join(projectRoot, `${assemblyName}.csproj`), generateCsprojContent(args.projectName, sdkVersion), 'utf8');
       }
-      return { content: [{ type: 'text', text: `Project "${args.projectName}" created at ${args.projectPath}${isDotnet ? ' (Godot .NET / C#)' : ''}` }] };
+      return { content: [{ type: 'text', text: `Project "${args.projectName}" created at ${projectRoot}${isDotnet ? ' (Godot .NET / C#)' : ''}` }] };
     } catch (error: any) {
       return createErrorResponse(`Failed to create project: ${error?.message || 'Unknown error'}`);
     }
@@ -5636,10 +5659,42 @@ export class GodotServer {
   private async handleCreateCsharpScript(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.scriptPath) return createErrorResponse('projectPath and scriptPath are required.');
-    if (!validatePath(args.projectPath) || !validatePath(args.scriptPath)) return createErrorResponse('Invalid path.');
-    const projectFile = join(args.projectPath, 'project.godot');
-    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
-    if (!this.isDotnetProject(args.projectPath))
+    // Canonical-root gate (matches the sibling `core_file_io` /
+    // `manage_shader` / `set_main_scene` / `manage_translations` /
+    // `manage_autoloads / manage_input_map / manage_export_presets` /
+    // `info-scene-settings-handler` / `script-resource-handler` /
+    // `manage_scene_signals / manage_theme_resource /
+    // manage_scene_structure` migration): the lexical `validatePath`
+    // boundary only rejects empty / `..` / null-byte strings and does
+    // not enforce the configured `PathPolicy` allowed roots. Resolve
+    // the project through `pathPolicy.assertProject` BEFORE any
+    // filesystem read so a caller can never reach `existsSync` /
+    // `mkdirSync` / `writeFileSync` with a `projectPath` that escapes
+    // the configured allowed roots.
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+    }
+    // Canonical-member gate (matches the sibling `core_file_io` /
+    // `manage_shader` / `set_main_scene` / `manage_translations` /
+    // `manage_scene_signals / manage_theme_resource /
+    // manage_scene_structure` migration): the lexical `validatePath`
+    // boundary only rejects empty / `..` / null-byte strings and lets
+    // absolute paths through. Resolve the new `scriptPath` through
+    // `pathPolicy.resolveProjectMember` BEFORE any `mkdirSync` /
+    // `writeFileSync` so a caller can never write the new script to a
+    // location outside the project root.
+    let scriptFull: string;
+    try {
+      scriptFull = this.pathPolicy.resolveProjectMember(projectRoot, args.scriptPath);
+    } catch (error: any) {
+      return createErrorResponse(`Invalid scriptPath: ${error?.message ?? 'invalid path.'}`);
+    }
+    const projectFile = join(projectRoot, 'project.godot');
+    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${projectRoot}`);
+    if (!this.isDotnetProject(projectRoot))
       return createErrorResponse('Not a Godot .NET project (no .csproj found). Use create_project with dotnet: true first.');
     if (!/\.cs$/i.test(args.scriptPath))
       return createErrorResponse('scriptPath must end with .cs');
@@ -5649,8 +5704,7 @@ export class GodotServer {
     if (args.className && args.className !== fileBase)
       return createErrorResponse(`className "${args.className}" must match the script file name "${fileBase}" for Godot to attach the script.`);
     try {
-      const fullPath = join(args.projectPath, args.scriptPath);
-      const dir = dirname(fullPath);
+      const dir = dirname(scriptFull);
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       let source = args.source;
       if (!source) {
@@ -5661,7 +5715,7 @@ export class GodotServer {
           methods: Array.isArray(args.methods) ? args.methods : undefined,
         });
       }
-      writeFileSync(fullPath, source, 'utf8');
+      writeFileSync(scriptFull, source, 'utf8');
       return { content: [{ type: 'text', text: `C# script created at ${args.scriptPath}` }] };
     } catch (error: any) {
       return createErrorResponse(`create_csharp_script failed: ${error?.message || 'Unknown error'}`);
@@ -7058,6 +7112,32 @@ export class GodotServer {
     const results: any[] = [];
     let filesWithErrors = 0;
     const toCheck: string[] = [];
+    // Reject explicit `args.scriptPaths` user input through the same
+    // canonical-project-member contract the sibling `core_file_io` /
+    // `manage_shader` / `set_main_scene` / `manage_translations` /
+    // `manage_scene_signals / manage_theme_resource /
+    // manage_scene_structure` gates already enforce. The lexical
+    // `validatePath` boundary only rejects empty / `..` / null-byte
+    // strings and lets absolute paths through (so e.g.
+    // `C:/Windows/System32/evil.gd` reaches `existsSync(join(projectRoot,
+    // 'C:/Windows/System32/evil.gd'))`, which silently looks for the
+    // path relative to the project root instead of inside the project
+    // root). Resolving through `pathPolicy.resolveProjectMember` first
+    // surfaces the canonical-member rejection as a typed
+    // `isError: true` envelope BEFORE any per-file `existsSync` /
+    // `runGdScriptCheck` call. Internal-relative paths from
+    // `listChangedGdFiles` / `listAllGdFiles` continue to flow through
+    // the lexical `validatePath(rel)` check at line 7062 because they
+    // are already produced by trusted internal scanners.
+    if (explicit) {
+      for (const candidate of candidates as string[]) {
+        try {
+          this.pathPolicy.resolveProjectMember(projectRoot, candidate);
+        } catch (error: any) {
+          return createErrorResponse(`Invalid scriptPath "${candidate}": ${error?.message ?? 'invalid path.'}`);
+        }
+      }
+    }
     for (const rel of candidates) {
       if (!/\.gd$/i.test(rel) || !validatePath(rel)) {
         if (explicit) results.push({ scriptPath: rel, checked: false, error: 'Not a valid .gd path' });
