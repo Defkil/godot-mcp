@@ -2,7 +2,7 @@
 
 - Timestamp: 2026-07-17 (tick T18)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
-- Branch: `refactor/senior-takeover`
+- Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
 - Current local package: `feat: gate script and resource handlers with canonical PathPolicy contract` (the new defense-in-depth package, fully described in the "Current package — script/resource handler defense-in-depth gate" section below; focused tests 10/10 green, full canonical gates green).
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.

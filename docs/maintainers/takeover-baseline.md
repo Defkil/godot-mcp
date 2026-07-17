@@ -19,7 +19,7 @@ tugcantopaloglu/godot-mcp
         v
 Defkil/godot-mcp
   local release-sync baseline: d293617
-  takeover branch: refactor/senior-takeover
+  architecture-hardening branch: refactor/core-hardening
 ```
 
 The original source and immediate upstream no longer share a Git merge base. The
@@ -35,7 +35,7 @@ commit has been pushed.
 | Published fork main | `origin/main` | `50db1a8` |
 | Immediate upstream release | `upstream/main` | `fcbc29e` |
 | Installed compatibility runtime | `upstream-runtime` | `50db1a8` |
-| Senior takeover | `refactor/senior-takeover` | starts at `d293617` |
+| Architecture hardening | `refactor/core-hardening` | starts at `d293617` |
 | Original-source evidence | `refs/remotes/source-audit/main` | `1209744` |
 
 The unrelated `gi-go-mcp-wt-takeover` worktree is not part of this project and is not
