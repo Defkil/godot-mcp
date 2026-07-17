@@ -5672,11 +5672,24 @@ export class GodotServer {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.action)
       return createErrorResponse('projectPath and action are required.');
-    if (!validatePath(args.projectPath))
-      return createErrorResponse('Invalid path.');
-    const projectFile = join(args.projectPath, 'project.godot');
+    // Canonical-root gate (matches the sibling `info / scene / settings` /
+    // `manage_input_map` / `manage_export_presets` migration): the lexical
+    // `validatePath` boundary only rejects empty / `..` / null-byte strings
+    // and does not enforce the configured `PathPolicy` allowed roots. Resolve
+    // the project through `pathPolicy.assertProject` BEFORE any filesystem
+    // read so an outside-roots projectPath can never reach `existsSync`,
+    // `readFileSync`, or `writeFileSync`. The request-boundary
+    // `assertSafeToolPaths` guard already rejects the same path, but the
+    // sibling pattern keeps the handler body's own defense consistent.
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+    }
+    const projectFile = join(projectRoot, 'project.godot');
     if (!existsSync(projectFile))
-      return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
+      return createErrorResponse(`Not a valid Godot project: ${projectRoot}`);
     try {
       let content = readFileSync(projectFile, 'utf8');
       if (args.action === 'list') {
@@ -5750,11 +5763,23 @@ export class GodotServer {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.action)
       return createErrorResponse('projectPath and action are required.');
-    if (!validatePath(args.projectPath))
-      return createErrorResponse('Invalid path.');
-    const projectFile = join(args.projectPath, 'project.godot');
+    // Canonical-root gate (sibling of `handleManageAutoloads` /
+    // `handleManageExportPresets`): replace the lexical `validatePath`
+    // boundary with `pathPolicy.assertProject` so an outside-roots
+    // projectPath can never reach `existsSync`, `readFileSync`, or
+    // `writeFileSync`. The request-boundary `assertSafeToolPaths` guard
+    // already rejects the same path; this keeps the handler body's own
+    // defense consistent with the sibling `info / scene / settings` /
+    // `core_file_io` / `manage_shader` / `manage_layers` migrations.
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+    }
+    const projectFile = join(projectRoot, 'project.godot');
     if (!existsSync(projectFile))
-      return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
+      return createErrorResponse(`Not a valid Godot project: ${projectRoot}`);
     // Sibling of [tugcantopaloglu#9]: gate `actionName` against a strict
     // identifier regex BEFORE any file write. The legacy code interpolated
     // `${args.actionName}` directly into `project.godot`, which let a caller
@@ -5870,12 +5895,24 @@ export class GodotServer {
       args = normalizeParameters(args || {});
       if (!args.projectPath || !args.action)
         return createErrorResponse('projectPath and action are required.');
-      if (!validatePath(args.projectPath))
-        return createErrorResponse('Invalid path.');
-      const projectFile = join(args.projectPath, 'project.godot');
+      // Canonical-root gate (sibling of `handleManageAutoloads` /
+      // `handleManageInputMap`): replace the lexical `validatePath`
+      // boundary with `pathPolicy.assertProject` so an outside-roots
+      // projectPath can never reach `existsSync`, `readFileSync`, or
+      // `writeFileSync`. The request-boundary `assertSafeToolPaths` guard
+      // already rejects the same path; this keeps the handler body's own
+      // defense consistent with the sibling `info / scene / settings` /
+      // `core_file_io` / `manage_shader` / `manage_layers` migrations.
+      let projectRoot: string;
+      try {
+        projectRoot = this.pathPolicy.assertProject(args.projectPath);
+      } catch (error: any) {
+        return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+      }
+      const projectFile = join(projectRoot, 'project.godot');
       if (!existsSync(projectFile))
-        return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
-      const presetsFile = join(args.projectPath, 'export_presets.cfg');
+        return createErrorResponse(`Not a valid Godot project: ${projectRoot}`);
+      const presetsFile = join(projectRoot, 'export_presets.cfg');
       // Sibling of [tugcantopaloglu#9]: gate `name` and `platform` against
       // strict allowlists BEFORE any file write. The legacy code interpolated
       // `${args.name}` and `${args.platform}` directly into a Godot INI-style
