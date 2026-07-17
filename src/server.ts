@@ -5351,9 +5351,9 @@ export class GodotServer {
     // single truth.
     if (!/\.(gd|cs)$/i.test(args.scriptPath))
       return createErrorResponse('attach_script scriptPath must end with .gd or .cs');
-    if (/\.cs$/i.test(args.scriptPath) && !this.isDotnetProject(args.projectPath))
+    if (/\.cs$/i.test(args.scriptPath) && !this.isDotnetProject(projectRoot))
       return createErrorResponse('Not a Godot .NET project (no .csproj found). Use create_project with dotnet: true first.');
-    return this.headlessOp('attach_script', args, a => ({
+    return this.headlessOp('attach_script', { ...args, projectPath: projectRoot }, a => ({
       projectPath: a.projectPath,
       params: { scenePath: a.scenePath, nodePath: a.nodePath, scriptPath: a.scriptPath },
     }));

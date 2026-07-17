@@ -4,12 +4,12 @@
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: `feat: gate handleAttachScript with canonical PathPolicy contract` (the new sibling-gate package, fully described in the topmost "Current package" section below; focused tests 6/6 green, full canonical gates green).
+- Current local package: repair the committed `handleAttachScript` PathPolicy gate so every downstream consumer receives the canonical project root, and normalize the handoff line endings so the committed range passes `git diff --check`.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `d00c4451cfd9a8443f12f70ee83814c476a73c63`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
 
-## Current package — handleAttachScript PathPolicy gate (sibling of tugcantopaloglu#9)
+## Current package — handleAttachScript canonical-root forwarding and line-ending repair
 
 The previous handoff listed three lexical-`validatePath`-boundary
 removals as deferred: the shared `headlessOp` lexical boundary at line
@@ -64,15 +64,18 @@ The package has two coherent changes:
      BEFORE the existing C# / .NET kind gate (which closes
      `Coding-Solo#114`) and BEFORE any `headlessOp` delegation when
      any of the three resolutions throws. The canonical
-     `projectRoot` is now used for the `isDotnetProject` check. The
+     `projectRoot` is used for both the `isDotnetProject` check and
+     the downstream `headlessOp` delegation, so a non-canonical caller
+     spelling cannot re-enter filesystem or subprocess code. The
      package preserves every existing strict-input gate: the
      script-kind regex on `scriptPath` (`.gd` / `.cs`), the
      C# / .NET kind gate, the `attach_script` op delegation, the
      `args` / `params` shape, and the success message.
 
-   The diff is 41 insertions, 0 deletions across the single handler
-   (the two long comment blocks together consume ~30 lines of the
-   insertion count). The diff adds no new helper modules, no new
+   The original commit added 41 lines to the handler. The focused
+   repair then routed the canonical `projectRoot` through the .NET
+   detector and the `headlessOp` call. The diff adds no new helper
+   modules, no new
    tests outside the focused test file, no schema changes, no
    handler signature changes, no capability policy changes, no
    BridgeClient changes, no `validatePath` lexical helper changes,
@@ -94,8 +97,9 @@ The package has two coherent changes:
      (`C:/Windows/System32/notepad.exe`) rejected; absolute-path
      `scriptPath` (`C:/Windows/System32/evil.cs`) rejected with the
      canonical-member message BEFORE any `isDotnetProject` /
-     `headlessOp` call; benign `.gd` accept path preserves the
-     existing happy path through `executeOperation`.
+     `headlessOp` call; the happy-path regression supplies a
+     non-canonical project-root spelling and proves the canonical root
+     is forwarded to both .NET detection and `executeOperation`.
 
    Every `projectPath`-outside-roots rejection asserts the
    canonical-root error message (`outside the (configured )?allowed
@@ -181,8 +185,8 @@ Source evidence:
 ## Verification on the package filesystem
 
 - `npx vitest run tests/attach-script-handler-injection.test.ts`:
-  1 file, 6 tests passed (RED 5/6 confirmed before the fix;
-  GREEN 6/6 after the regex widening to include `must be relative`).
+  1 file, 6 tests passed (RED 5/6 confirmed before the original gate;
+  GREEN 6/6 after the gate and canonical-root forwarding repair).
 - `npx vitest run tests/attach-script-handler-injection.test.ts
   tests/attach-script-dotnet-gate.test.ts`: 2 files, 10 tests
   passed (regression covers the existing C# / .NET kind gate that
@@ -192,11 +196,12 @@ Source evidence:
 - `npm run build`: passed; TypeScript compiled, scripts copied to
   `build/scripts/`.
 - `npm audit --audit-level=high`: 0 vulnerabilities.
-- `git diff --check`: passed (exit 0; the only emitted warning is
-  the standard Windows `core.autocrlf=true` notice for the
-  modified `docs/maintainers/issue-inventory.md` and the new
-  `tests/attach-script-handler-injection.test.ts` line-ending
-  refresh, which the sibling packages on this branch also emit).
+- `git diff --check HEAD^..HEAD` exposed a real committed defect:
+  the 196 lines added by the prior package used CRLF in the Git blob,
+  so Git reported each as trailing whitespace. The repair normalizes
+  only those newly added lines to LF in Git while preserving the
+  historical handoff bytes; final  evidence below
+  supersedes the stale claim.
 
 Any source, test, documentation, build/import, generated-artifact,
 amend, or cleanup edit after these commands invalidates the relevant

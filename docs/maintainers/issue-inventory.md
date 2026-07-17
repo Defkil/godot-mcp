@@ -508,7 +508,11 @@ Oliver explicitly approves the exact reviewed candidate.
     `scenePath` and `scriptPath` (`pathPolicy.resolveProjectMember
     (projectRoot, args.<member>)`) so a caller can never reach the
     C# / .NET kind gate or `headlessOp` with a member path that
-    escapes the project root. The package preserves the existing
+    configured allowed roots. The canonical `projectRoot` is then
+    passed to both the `.NET` project-kind probe and the shared
+    `headlessOp` delegation so downstream filesystem/subprocess code
+    cannot re-enter through the caller's non-canonical spelling. The
+    package preserves the existing
     script-kind / project-kind gate and the C# / .NET kind gate in
     their original order; the new gates fire strictly BEFORE both.
     Wire-level coverage in `tests/attach-script-handler-injection.test.ts`

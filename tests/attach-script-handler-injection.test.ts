@@ -170,21 +170,30 @@ describe('handleAttachScript adopts the canonical PathPolicy contract in its own
     expect(response.content[0].text).not.toMatch(/Not a valid Godot project/i);
   });
 
-  it('accepts a benign .gd attach_script call once the canonical gate validates the inputs', async () => {
+  it('forwards the canonical project root into .NET detection and the headless operation', async () => {
     const { root } = makeProject();
     const scriptDir = join(root, 'scripts');
     mkdirSync(scriptDir, { recursive: true });
-    writeFileSync(join(scriptDir, 'player.gd'), 'extends Node\n', 'utf8');
+    writeFileSync(join(scriptDir, 'player.cs'), 'using Godot;\n', 'utf8');
     const sceneDir = join(root, 'scenes');
     mkdirSync(sceneDir, { recursive: true });
     writeFileSync(join(sceneDir, 'Main.tscn'), '[gd_scene]\n', 'utf8');
-    // Stub executeOperation so the test never spawns Godot and never leaves
-    // the worktree dirty. The canonical-root gate must run BEFORE
-    // executeOperation is reached.
+    // Stub the .NET probe and operation so the test never spawns Godot. The
+    // canonical root returned by PathPolicy must be the path used by both
+    // downstream consumers, not the caller's non-canonical spelling.
     const server = makeServer(root);
-    let executeOperationCalls = 0;
-    (server as any).executeOperation = async () => {
-      executeOperationCalls += 1;
+    let observedDotnetProjectPath: string | undefined;
+    let observedOperationProjectPath: string | undefined;
+    (server as any).isDotnetProject = (projectPath: string) => {
+      observedDotnetProjectPath = projectPath;
+      return true;
+    };
+    (server as any).executeOperation = async (
+      _operation: string,
+      _params: unknown,
+      projectPath: string,
+    ) => {
+      observedOperationProjectPath = projectPath;
       return {
         stdout: `attach_script ok`,
         stderr: '',
@@ -192,12 +201,13 @@ describe('handleAttachScript adopts the canonical PathPolicy contract in its own
       };
     };
     const response = await (server as any).handleAttachScript({
-      projectPath: root,
+      projectPath: `${root}/./`,
       scenePath: 'scenes/Main.tscn',
       nodePath: 'root',
-      scriptPath: 'scripts/player.gd',
+      scriptPath: 'scripts/player.cs',
     });
     expect(response.isError).toBeFalsy();
-    expect(executeOperationCalls).toBe(1);
+    expect(observedDotnetProjectPath).toBe(root);
+    expect(observedOperationProjectPath).toBe(root);
   });
 });
