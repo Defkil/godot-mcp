@@ -4,8 +4,9 @@
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/senior-takeover`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package under repair: `fix: correct asset import eligibility and canonical probe wiring` (follow-up to `88dda1e`, preserving the original package immutable and addressing the independent NeuralWatt REJECT).
-- Current HEAD before the repair commit: `88dda1e449ad784bd76cfe324ce441941ae06715`.
+- Current local package: `fix: correct asset import prerequisite classification` (`76c9207`, accepted by independent NeuralWatt review after repairing the prior `88dda1e` REJECT).
+- Current HEAD after the repair commit: `76c9207712dfc9152f809c33a8c59d7131340668`.
+- Previous reviewed package commit: `88dda1e449ad784bd76cfe324ce441941ae06715`; the repair is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
 
 ## Current package — modify→read round-trip contract for resource properties
@@ -632,9 +633,11 @@ The repair remains local-only and does not push, publish, create a PR/release, u
 
 - Focused asset-import test: 16 tests passed.
 - Full canonical gates after the repair source/test edits: `npm test` 34 files, 695 tests passed; `npm run build` passed; `npm audit --audit-level=high` reported 0 vulnerabilities; `git diff --check` passed.
+- Committed repair gates: rerun after the final handoff-only edit before publication.
+- Independent NeuralWatt review of exact commit `76c9207712dfc9152f809c33a8c59d7131340668`: `VERDICT | ACCEPT`; reviewer HEAD/status fingerprint unchanged. The reviewer independently confirmed `.json`/`.pck` direct-loaded regressions, canonical `PathPolicy` injection, truthful boundary comments, safe advisory quoting, scope preservation, and no amendment of `88dda1e`.
 - Godot executable: unavailable on this runner (`godot`/`godot4` not found); real-Godot and Wargrid acceptance remain unproven.
 - Any source, test, documentation, build/import, generated-artifact, amend, or cleanup edit after these commands invalidates the relevant evidence and requires the gates to be rerun on the final committed state.
 
 ## Next safe action
 
-Stage only the repair-owned files (`src/godot/asset-import-state.ts`, `src/server.ts`, `tests/asset-import-prerequisite.test.ts`, and this handoff plus the #103 inventory row), commit locally with a focused Conventional Commit, rerun all canonical gates on the committed state, then dispatch NeuralWatt against the exact repair commit. Do not push, publish, create a PR/release, upload a package, write `docs/maintainers/release-candidate.md`, or send the candidate-ready notification.
+The accepted local repair is ready for the next bounded takeover package. The highest-priority remaining package is the generic headless Godot test runner with GUT adapter (#29), but the Godot binary is unavailable here; select only after fresh repository evidence and a bounded RED test. Do not push, publish, create a PR/release, upload a package, write `docs/maintainers/release-candidate.md`, or send the candidate-ready notification.
