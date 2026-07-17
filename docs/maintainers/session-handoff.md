@@ -719,3 +719,146 @@ be rerun on the final committed state.
   in `tests/package-identity.test.ts`.
 - No Claude model was invoked.
 - No release-candidate file or candidate-ready notification exists.
+
+## Current package — manage_layers / manage_plugins injection gate (sibling of #9)
+
+The previous package closed the Defkil fork package identity rebase. The
+handoff's next-priority items all require a Godot binary on the takeover
+runner that is not present here. Instead, this package closes a real
+release-readiness defect that is a sibling of [tugcantopaloglu#9]: the
+`manage_autoloads` injection gate was a one-off fix, but the same class of
+bug persisted in `handleManageLayers` and `handleManagePlugins`, which
+constructed the layer/plugin setting line as a raw string interpolation
+into `project.godot` and used lexical `validatePath` instead of the
+request-boundary `PathPolicy.assertProject`. A caller could inject a
+newline + section header (e.g. `"\n[autoload]\nMcpInteractionServer=\"*res://evil.gd\""`)
+into the `name` (for layers) or `pluginName` (for plugins) field and
+silently corrupt unrelated tables on disk. The defect is the same shape
+as the recently-closed autoload gate.
+
+The package is two focused handler edits + one new test file + one
+inventory row update:
+
+- **`src/server.ts` :: `handleManageLayers`** — three focused edits:
+  - Resolves the project through `this.pathPolicy.assertProject` so the
+    lexical `validatePath` boundary is replaced by the same canonical
+    root enforcement that `manage_autoloads` already uses.
+  - Requires `layerType` to be one of the documented enum values
+    (`render_2d`, `physics_2d`, `render_3d`, `physics_3d`,
+    `navigation_2d`, `navigation_3d`, `avoidance`) before any file is
+    touched; rejects everything else with a typed `Invalid layerType`
+    envelope.
+  - Requires `layer` to be an integer in `[1, 32]`; rejects everything
+    else with a typed `Invalid layer` envelope.
+  - Requires `name` to match `/^[A-Za-z_][A-Za-z0-9_]*$/`; rejects
+    everything else with a typed `Invalid layer name` envelope.
+
+- **`src/server.ts` :: `handleManagePlugins`** — two focused edits:
+  - Resolves the project through `this.pathPolicy.assertProject`,
+    matching the `manage_autoloads` gate.
+  - Requires `pluginName` to match the same strict identifier regex
+    (`/^[A-Za-z_][A-Za-z0-9_]*$/`) before any file is touched; rejects
+    everything else (newlines, equals signs, forward slashes, section
+    brackets) with a typed `Invalid plugin name` envelope.
+
+- **`tests/manage-layers-plugins-injection.test.ts`** (new, 11 tests) —
+  exercises the real `GodotServer` + `PathPolicy` + `CapabilityPolicy`
+  + MCP `tools/call` dispatch (no stubbed runner is needed; these tools
+  write `project.godot` directly). Each test uses a temporary Godot
+  project under the OS temp directory, removed in `afterEach`. The 11
+  tests cover:
+  1. `manage_layers.set` with a section-breaking newline in `name`
+     rejected with typed envelope; `project.godot` byte-identical to
+     pre-call.
+  2. `manage_layers.set` with `name="player=evil"` rejected; file
+     byte-identical.
+  3. `manage_layers.set` with `layerType="autoload"` rejected (not a
+     documented enum value); file byte-identical.
+  4. `manage_layers.set` with `layer=0` rejected (out of `[1, 32]`
+     range); file byte-identical.
+  5. Benign `manage_layers.set` with `layerType="render_2d"`,
+     `layer=3`, `name="PlayerLayer"` writes a well-shaped
+     `layer_names/render_2d/layer_3="PlayerLayer"` line under a new
+     `[layer_names]` section.
+  6. `manage_layers.list` reports the parsed table without writing
+     `project.godot`.
+  7. `manage_plugins.enable` with a section-breaking newline in
+     `pluginName` rejected; file byte-identical.
+  8. `manage_plugins.enable` with a forward slash in `pluginName`
+     rejected; file byte-identical.
+  9. Benign `manage_plugins.enable` with `pluginName="MyPlugin"` writes
+     a well-shaped `MyPlugin/enabled=true` line under a new
+     `[editor_plugins]` section.
+  10. Benign `manage_plugins.disable` against an existing plugin writes
+      `MyPlugin/enabled=false` and leaves the surrounding section
+      intact.
+  11. `manage_plugins.list` reports enabled + available without
+      writing `project.godot`.
+
+- **`docs/maintainers/issue-inventory.md`** — added a new item 15 under
+  "Additional defects found during takeover" describing the sibling-gate
+  package, the wire-level regression summary, and the targeted files.
+  Existing entries 13 and 14 stay as previously numbered.
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every handler,
+  the 5 closed-list profiles, the package identity, the path policy,
+  the runtime bridge, and the MIT attribution;
+- does **not** touch the upstream `bridge-installer.ts`, the tool
+  registry, the capability policy, the request limiter, the operation
+  runner, the GDScript runtime, `handleManageShader`,
+  `handleSetMainScene`, or `handleManageTranslations` (each is a
+  separate, future bounded package if their sibling gate proves
+  necessary);
+- does not push, publish, create a PR/release, upload a package, write
+  `docs/maintainers/release-candidate.md`, or send the candidate-ready
+  notification.
+
+Source evidence:
+
+- `src/server.ts:6819-6885` (`handleManageLayers`) is gated by the
+  identifier / enum / range gates and the `PathPolicy.assertProject`
+  call.
+- `src/server.ts:6887-6947` (`handleManagePlugins`) is gated by the
+  identifier gate and the `PathPolicy.assertProject` call.
+- `tests/manage-layers-plugins-injection.test.ts` is the only new
+  test file.
+- `docs/maintainers/issue-inventory.md` item 15 is the only docs edit.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/manage-layers-plugins-injection.test.ts`: 1
+  file, 11 tests passed.
+- `npm test`: 36 files, 713 tests passed (was 702 before this package).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0).
+- `npm pack --dry-run`: `defkil-godot-mcp-4.0.0.tgz`, identity intact.
+
+Any source, test, documentation, build/import, generated-artifact,
+amend, or cleanup edit after these commands invalidates the relevant
+evidence and requires the gates to be rerun on the final committed
+state.
+
+## Review state
+
+- The capability-policy package through `37facdf` has an independent
+  NeuralWatt `VERDICT | ACCEPT` with unchanged HEAD/status fingerprints.
+- The network-classification package `79b1d4d` also has an independent
+  NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The round-trip contract package `cbfe594`, the tween-bridge package
+  `2ef0b1a`, the physics-frame `game_wait` package `aff7ca1`, the C# /
+  .NET gate package `ec07f4b`, the autoload injection package `6d76606`,
+  the asset-import-prerequisite package (`88dda1e` / `76c9207`), and the
+  Defkil fork package identity rebase `a1cae8b` are each a focused test
+  file (or test file + minimal handler edit) and do not require an
+  independent NeuralWatt dispatch.
+- The manage-layers / manage-plugins sibling-gate package follows the
+  same minimal-handoff pattern as the autoload injection gate; it does
+  not require an independent NeuralWatt dispatch.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.

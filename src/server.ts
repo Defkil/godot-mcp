@@ -6819,8 +6819,16 @@ export class GodotServer {
   private async handleManageLayers(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.action) return createErrorResponse('projectPath and action are required.');
-    if (!validatePath(args.projectPath)) return createErrorResponse('Invalid path.');
-    const projectFile = join(args.projectPath, 'project.godot');
+    // Resolve the project through the request-boundary path policy so a
+    // caller cannot use lexical `validatePath` to bypass canonical-root
+    // enforcement (matches the gate applied to `manage_autoloads`).
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(error?.message || 'Invalid project path.');
+    }
+    const projectFile = join(projectRoot, 'project.godot');
     if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
     try {
       let content = readFileSync(projectFile, 'utf8');
@@ -6833,8 +6841,32 @@ export class GodotServer {
         }
         return { content: [{ type: 'text', text: JSON.stringify({ layers }, null, 2) }] };
       } else if (args.action === 'set') {
-        if (!args.layerType || !args.layer || !args.name) return createErrorResponse('layerType, layer, and name are required for set.');
-        const key = `layer_names/${args.layerType}/layer_${args.layer}`;
+        if (!args.layerType || args.layer === undefined || args.layer === null || !args.name) return createErrorResponse('layerType, layer, and name are required for set.');
+        // Strict layerType gate: only documented enum values. Without
+        // this gate a caller could smuggle `autoload`/`application` and
+        // write into a different table.
+        const allowedLayerTypes = new Set(['render_2d', 'physics_2d', 'render_3d', 'physics_3d', 'navigation_2d', 'navigation_3d', 'avoidance']);
+        if (!allowedLayerTypes.has(args.layerType)) {
+          return createErrorResponse(
+            `Invalid layerType: must be one of ${[...allowedLayerTypes].join(', ')} (got ${JSON.stringify(args.layerType)}).`,
+          );
+        }
+        // Strict layer gate: integer in [1, 32].
+        const layerNum = typeof args.layer === 'number' ? args.layer : parseInt(args.layer, 10);
+        if (!Number.isInteger(layerNum) || layerNum < 1 || layerNum > 32) {
+          return createErrorResponse(
+            `Invalid layer: must be an integer in [1, 32] (got ${JSON.stringify(args.layer)}).`,
+          );
+        }
+        // Strict name gate: ASCII identifier only, so a caller cannot
+        // smuggle newlines, equals signs, or section brackets into
+        // project.godot.
+        if (typeof args.name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(args.name)) {
+          return createErrorResponse(
+            `Invalid layer name: must match /^[A-Za-z_][A-Za-z0-9_]*$/ (got ${JSON.stringify(args.name)}).`,
+          );
+        }
+        const key = `layer_names/${args.layerType}/layer_${layerNum}`;
         const settingLine = `${key}="${args.name}"`;
         const existingRegex = new RegExp(`${key.replace(/\//g, '\\/')}="[^"]*"`);
         if (existingRegex.test(content)) {
@@ -6855,8 +6887,16 @@ export class GodotServer {
   private async handleManagePlugins(args: any) {
     args = normalizeParameters(args || {});
     if (!args.projectPath || !args.action) return createErrorResponse('projectPath and action are required.');
-    if (!validatePath(args.projectPath)) return createErrorResponse('Invalid path.');
-    const projectFile = join(args.projectPath, 'project.godot');
+    // Resolve the project through the request-boundary path policy so a
+    // caller cannot use lexical `validatePath` to bypass canonical-root
+    // enforcement (matches the gate applied to `manage_autoloads`).
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(args.projectPath);
+    } catch (error: any) {
+      return createErrorResponse(error?.message || 'Invalid project path.');
+    }
+    const projectFile = join(projectRoot, 'project.godot');
     if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${args.projectPath}`);
     try {
       let content = readFileSync(projectFile, 'utf8');
@@ -6867,7 +6907,7 @@ export class GodotServer {
         while ((match = pluginRegex.exec(content)) !== null) {
           plugins.push(match[1]);
         }
-        const addonsDir = join(args.projectPath, 'addons');
+        const addonsDir = join(projectRoot, 'addons');
         const available: string[] = [];
         if (existsSync(addonsDir)) {
           const entries = readdirSync(addonsDir, { withFileTypes: true });
@@ -6878,9 +6918,19 @@ export class GodotServer {
         return { content: [{ type: 'text', text: JSON.stringify({ enabled: plugins, available }, null, 2) }] };
       } else if (args.action === 'enable' || args.action === 'disable') {
         if (!args.pluginName) return createErrorResponse('pluginName is required.');
+        // Strict plugin-name gate: ASCII identifier only, so a caller
+        // cannot smuggle newlines, equals signs, forward slashes, or
+        // section brackets into project.godot. Without this gate a name
+        // like `myplugin\n[autoload]\n...` would silently corrupt
+        // unrelated tables on disk.
+        if (typeof args.pluginName !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(args.pluginName)) {
+          return createErrorResponse(
+            `Invalid plugin name: must match /^[A-Za-z_][A-Za-z0-9_]*$/ (got ${JSON.stringify(args.pluginName)}).`,
+          );
+        }
         const key = `${args.pluginName}/enabled`;
         const val = args.action === 'enable' ? 'true' : 'false';
-        const existingRegex = new RegExp(`${args.pluginName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\/enabled=\\w+`);
+        const existingRegex = new RegExp(`${args.pluginName}\\/enabled=\\w+`);
         if (existingRegex.test(content)) {
           content = content.replace(existingRegex, `${key}=${val}`);
         } else {
