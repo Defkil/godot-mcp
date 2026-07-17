@@ -5476,19 +5476,51 @@ export class GodotServer {
       } else if (args.action === 'add') {
         if (!args.name || !args.path)
           return createErrorResponse('name and path are required for add action.');
-        const autoloadLine = `${args.name}="*${args.path}"`;
+        // Strict autoload-name gate: matches an ASCII identifier only,
+        // so callers cannot smuggle newlines, equals signs, or section
+        // brackets into the project.godot autoload table. Without this
+        // gate, a name like "Evil\n[layer_names]\n..." would silently
+        // corrupt unrelated sections on disk.
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(args.name))
+          return createErrorResponse(
+            `Invalid autoload name: must match /^[A-Za-z_][A-Za-z0-9_]*$/ (got ${JSON.stringify(args.name)}).`,
+          );
+        // Strict resource-path gate: must begin with `res://` followed by
+        // a relative project member that contains no `..` segment, no
+        // backslash escapes, and no leading slash. Prevents both raw-
+        // path injection (`evil.gd`) and project-root escape attempts
+        // (`res://../etc/passwd`).
+        const resMatch = /^res:\/\/([^\s]+)$/.exec(args.path);
+        if (!resMatch)
+          return createErrorResponse(
+            `Invalid autoload path: must start with "res://" (got ${JSON.stringify(args.path)}).`,
+          );
+        const member = resMatch[1].replace(/\\/g, '/').replace(/^\/+/, '');
+        if (!member || member.includes('..') || member.split('/').includes(''))
+          return createErrorResponse(
+            `Invalid autoload path: project member must not be empty, contain "..", or include blank segments (got ${JSON.stringify(args.path)}).`,
+          );
+        const autoloadLine = `${args.name}="*res://${member}"`;
         if (content.includes('[autoload]')) {
           content = content.replace('[autoload]', `[autoload]\n\n${autoloadLine}`);
         } else {
           content += `\n[autoload]\n\n${autoloadLine}\n`;
         }
         writeFileSync(projectFile, content, 'utf8');
-        return { content: [{ type: 'text', text: `Autoload "${args.name}" added: ${args.path}` }] };
+        return { content: [{ type: 'text', text: `Autoload "${args.name}" added: res://${member}` }] };
       } else if (args.action === 'remove') {
         if (!args.name)
           return createErrorResponse('name is required for remove action.');
-        const pattern = new RegExp(`\\n?${args.name}\\s*=.*\\n?`, 'g');
-        content = content.replace(pattern, '\n');
+        // Strict autoload-name gate (same regex as `add`) so the regex
+        // below cannot be tricked into wildcards or alt-branches. Without
+        // this check, a name like `.*` would wipe every autoload line.
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(args.name))
+          return createErrorResponse(
+            `Invalid autoload name: must match /^[A-Za-z_][A-Za-z0-9_]*$/ (got ${JSON.stringify(args.name)}).`,
+          );
+        const escapedName = args.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = new RegExp(`^\\s*${escapedName}\\s*=.*$\\n?`, 'gm');
+        content = content.replace(pattern, '');
         writeFileSync(projectFile, content, 'utf8');
         return { content: [{ type: 'text', text: `Autoload "${args.name}" removed.` }] };
       }

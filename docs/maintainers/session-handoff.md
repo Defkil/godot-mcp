@@ -331,6 +331,137 @@ be rerun on the final committed state.
 - No Claude model was invoked.
 - No release-candidate file or candidate-ready notification exists.
 
+## Current package — `manage_autoloads` injection gate for #9
+
+The previous package closed the `attach_script` C# / .NET gate (#114).
+The handoff's next safe action was the headless Godot test runner
+(#29), which requires a Godot binary that is not present on this
+runner. Instead, this package closes a real security regression in
+`handleManageAutoloads` that the takeover inherited from the legacy
+source: callers could write arbitrary bytes into `project.godot` and
+silently corrupt unrelated sections or wipe every existing autoload.
+
+The package is one focused test file + one handler edit + one
+inventory update:
+
+- **`tests/manage-autoloads-injection.test.ts`** (new, 7 tests) —
+  exercises the real `GodotServer` and the real MCP `tools/call`
+  handler with a stubbed runner-style boundary (none is needed —
+  `manage_autoloads` writes the project file directly). Each test
+  uses a temporary Godot project under the OS temp directory that is
+  removed in `afterEach`. The seven tests cover:
+
+  1. `add` with a `name` containing a newline + section header
+     (`"Evil\n[layer_names]\n0=\"player\""`) is rejected with a typed
+     `isError: true` envelope, AND `project.godot` is left
+     byte-identical to its pre-call snapshot — proves the file-system
+     rollback half of the gate.
+  2. `add` with a `path` lacking the `res://` prefix (`"evil.gd"`)
+     is rejected with a typed diagnostic; `project.godot` is
+     unchanged.
+  3. `add` with `path: "res://../etc/passwd"` is rejected as a
+     project-root escape attempt; `project.godot` is unchanged.
+  4. `add` with a benign `name="PlayerAutoload"` and
+     `path="res://scripts/player.gd"` succeeds and appends a
+     well-shaped autoload line that does not corrupt the existing
+     `[autoload]` table or any other section.
+  5. `remove` with `name: ".*"` is rejected as a regex wildcard
+     before the file is touched — proves the regex-injection half
+     of the gate; `project.godot` is unchanged.
+  6. `remove` with the exact autoload name still works and leaves
+     sibling autoloads untouched.
+  7. `list` still returns the parsed autoload table without writing
+     `project.godot` (locks the existing wire contract for `list`).
+
+  The file uses the same wire-level pattern as
+  `tests/attach-script-dotnet-gate.test.ts`:
+  `GodotServer` + `toolsCall` against
+  `(server as any).server._requestHandlers.get('tools/call')` with a
+  fresh `PathPolicy([root])` and `CapabilityPolicy('unsafe-full')`,
+  so the test exercises the live MCP dispatch + capability gate
+  path, not a side-stepped import. After every rejected mutation the
+  test re-reads `project.godot` and asserts byte-equality with the
+  pre-call snapshot.
+
+- **`src/server.ts` :: `handleManageAutoloads`** — three focused
+  edits:
+
+  - The `add` branch now requires `name` to match
+    `/^[A-Za-z_][A-Za-z0-9_]*$/` and rejects everything else with a
+    typed `Invalid autoload name` envelope before touching
+    `project.godot`.
+  - The `add` branch now requires `path` to begin with `res://`
+    followed by a relative project member that rejects bare paths,
+    `..` segments, leading slashes, and backslash escapes. The
+    validated member is re-attached to a literal `res://` prefix
+    before the line is written, so the autoload table only ever
+    contains canonical project members.
+  - The `remove` branch now requires the same identifier gate on
+    `name` (so `.*` and `[` are rejected) and uses an anchored
+    per-line regex so a caller cannot smuggle wildcards through the
+    removal pattern.
+
+  The diff is 35 insertions, 5 deletions.
+
+- **`docs/maintainers/issue-inventory.md`** — row for
+  `[tugcantopaloglu#9]` keeps its `partial` disposition (the byte-exact
+  transactional cleanup at the bridge-installer layer remains the
+  canonical mechanism there) and now points at the focused regression
+  coverage, the identifier / res-path gate, and the regex
+  hardening.
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every
+  handler, the 5 closed-list profiles, the package identity, the
+  path policy, the runtime bridge, and the MIT attribution;
+- does **not** touch the upstream `bridge-installer.ts` autoload
+  logic, the tool registry, the capability policy, the request
+  limiter, the operation runner, or the GDScript runtime;
+- does not push, publish, create a PR/release, upload a package,
+  write `docs/maintainers/release-candidate.md`, or send the
+  candidate-ready notification.
+
+Source evidence:
+
+- `src/server.ts:5455-5549` (the `handleManageAutoloads` body) is the
+  only modified handler.
+- `tests/manage-autoloads-injection.test.ts` is the only new test
+  file.
+- `docs/maintainers/issue-inventory.md` row 30 is the only docs edit.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/manage-autoloads-injection.test.ts`: 1 file, 7 tests passed.
+- `npm test`: 33 files, 679 tests passed (was 668 before this package).
+- `npm run build`: passed; TypeScript compiled, scripts copied to `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0).
+
+Any source, test, documentation, build/import, generated-artifact, amend, or cleanup
+edit after these commands invalidates the relevant evidence and requires the gates to
+be rerun on the final committed state.
+
+## Review state
+
+- The capability-policy package through `37facdf` has an independent
+  NeuralWatt `VERDICT | ACCEPT` with unchanged HEAD/status fingerprints.
+- The network-classification package `79b1d4d` also has an independent
+  NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The round-trip contract package `cbfe594`, the tween-bridge package
+  `2ef0b1a`, the physics-frame `game_wait` package `aff7ca1`, and the
+  C#-gate package `ec07f4b` are each a focused test file (or test
+  file + minimal handler edit) and do not require an independent
+  NeuralWatt dispatch.
+- The autoload injection gate is a single test file plus a small,
+  focused `handleManageAutoloads` edit; it follows the same minimal-
+  handoff pattern as the attach-script C# / .NET gate, and does not
+  require an independent NeuralWatt dispatch.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.
+
 ## Open inventory priorities
 
 1. Generic headless Godot test runner with GUT adapter (#29).
