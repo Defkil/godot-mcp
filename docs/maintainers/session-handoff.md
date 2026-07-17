@@ -1943,3 +1943,270 @@ state.
   require an independent NeuralWatt dispatch.
 - No Claude model was invoked.
 - No release-candidate file or candidate-ready notification exists.
+## Current package — info / scene / settings / sprite / mesh-library / export PathPolicy gate
+
+The previous handoff listed the remaining `validatePath`-gated file-mutation
+handlers as the highest-priority next bounded package. This package closes
+ten of them in one cohesive commit: `handleListProjects`,
+`handleGetProjectInfo`, `handleSaveScene`, `handleGetUid`,
+`handleReadProjectSettings`, `handleModifyProjectSettings`,
+`handleListProjectFiles`, `handleLoadSprite`, `handleExportMeshLibrary`,
+and `handleExportProject`. It also drops the redundant lexical
+`validatePath(args.projectPath)` from `handleRunProject` (already covered
+by `pathPolicy.allowsProject` + `pathPolicy.assertProject` further down
+the body). The remaining seven handlers (`handleRunProject` `args.scene`,
+`handleCreateProject`, `handleCreateCsharpScript`,
+`handleManageAutoloads`, `handleManageInputMap`,
+`handleManageExportPresets`, `handleValidateScripts`) carry documented
+semantic differences that defer their migration to the next-follow-up
+release gate (see the rationale at the bottom of this section).
+
+Each migrated handler historically opened with
+`if (!validatePath(args.projectPath) || !validatePath(args.<member>))`
+and then `join(args.projectPath, args.<member>)`-ed the user-supplied
+values into `existsSync` / `readFileSync` / `writeFileSync` /
+`executeOperation` / `execFileAsync`. The lexical `validatePath` only
+rejects empty / `..`-prefixed / null-byte strings — it does not enforce
+the canonical-roots list or canonical-member resolution. The
+request-boundary `assertSafeToolPaths` guard already rejects every
+canonical member path that would escape the configured `PathPolicy`
+roots BEFORE the handler is called, so the runtime is not exposed to
+a fresh escape. This package proves the same contract is enforced
+*inside the handler body itself* by replacing the lexical boundary
+with `pathPolicy.assertProject(args.projectPath)` +
+`pathPolicy.resolveProjectMember(projectRoot, args.<member>)` and
+returning a typed `isError: true` envelope BEFORE any filesystem or
+subprocess call when either resolution throws.
+
+The package has two coherent changes:
+
+1. **`src/server.ts`** — focused gate additions to the ten handlers,
+   matching the sibling `core_file_io` / `manage_shader` /
+   `set_main_scene` / `manage_translations` / `script-resource-handler`
+   pattern exactly. Per-handler shape:
+
+   - **`handleListProjects`** — replaces lexical `validatePath` on
+     `args.directory` with `pathPolicy.allowsProject(args.directory)`
+     (rather than `assertProject` because the directory may not yet
+     exist; the handler itself creates or walks the tree).
+   - **`handleGetProjectInfo`** — replaces lexical `validatePath` on
+     `args.projectPath` with `pathPolicy.assertProject(args.projectPath)`;
+     the canonical `projectRoot` is now read by `getProjectStructureAsync`,
+     `basename(projectRoot)`, and `isDotnetProject(projectRoot)`.
+   - **`handleSaveScene`** — adds `pathPolicy.assertProject` for
+     `args.projectPath` and `pathPolicy.resolveProjectMember` for
+     both `args.scenePath` and `args.newPath`. `executeOperation`
+     now receives the canonical `projectRoot`.
+   - **`handleGetUid`** — same shape: `assertProject` for
+     `args.projectPath`, `resolveProjectMember` for `args.filePath`;
+     `executeOperation` receives the canonical `projectRoot`.
+   - **`handleReadProjectSettings`** / **`handleModifyProjectSettings`** —
+     `assertProject` for `args.projectPath`; the underlying
+     `project.godot` file path is read from `projectRoot`. The
+     `modify_project_settings` byte-identical rollback assertion is
+     preserved by the new gate (a rejected write never reaches
+     `writeFileSync`).
+   - **`handleListProjectFiles`** — `assertProject` for
+     `args.projectPath`; `listProjectFiles` receives the canonical
+     `projectRoot`, and the `baseDir` join for `args.subdirectory`
+     uses the canonical root.
+   - **`handleLoadSprite`** — `assertProject` for `args.projectPath`,
+     `resolveProjectMember` for `args.scenePath` and `args.texturePath`.
+     `nodePath` stays unchanged because it is a runtime scene-graph
+     identifier, not a filesystem path. `detectAssetImportState`
+     receives the canonical `projectRoot` so the missing-sidecar
+     probe (Coding-Solo#103) honors the resolved project root.
+     `executeOperation` receives the canonical `projectRoot`.
+   - **`handleExportMeshLibrary`** — `assertProject` for
+     `args.projectPath`, `resolveProjectMember` for `args.scenePath`
+     and `args.outputPath`. `executeOperation` receives the
+     canonical `projectRoot`.
+   - **`handleExportProject`** — `assertProject` for `args.projectPath`.
+     `args.outputPath` and `args.presetName` stay as raw runtime
+     arguments to the Godot CLI; the package intentionally does NOT
+     introduce a `resolveProjectMember` gate for them because they
+     are forwarded to `godot --export-release <preset> <output>`
+     verbatim and the new `assertProject` boundary is sufficient.
+     `execFileAsync` now receives the canonical `projectRoot`.
+   - **`handleRunProject`** — drops the redundant
+     `if (!validatePath(args.projectPath))` block; `pathPolicy.allowsProject`
+     + `pathPolicy.assertProject` (already present below it) enforce
+     the same canonical-root contract. The runtime `args.scene`
+     lexical check at the spawn-arg site stays because `args.scene`
+     is a runtime Godot CLI argument, not a filesystem path under
+     the project root.
+
+   The diff is 194 insertions, 87 deletions across the eleven
+   handlers. The diff adds no new helper modules, no new tests
+   outside the focused test file, no schema changes, no handler
+   signature changes, no capability policy changes, no BridgeClient
+   changes, and no `validatePath` lexical helper changes.
+
+2. **`tests/info-scene-settings-handler-injection.test.ts`** (new,
+   20 tests) — exercises the real `GodotServer` + `PathPolicy` +
+   `CapabilityPolicy` + the private handler methods. Each test uses
+   a temporary Godot project under the OS temp directory, removed
+   in `afterEach`. The 20 tests cover:
+
+   - **`list_projects`** (2 tests): `directory` outside allowed
+     roots rejected; `directory` containing `..` traversal rejected.
+   - **`get_project_info`** (1 test): `projectPath` outside
+     allowed roots rejected.
+   - **`save_scene`** (4 tests): `projectPath` outside allowed
+     roots rejected; `scenePath` containing `..` traversal
+     rejected; absolute `scenePath` rejected; `newPath`
+     containing `..` traversal rejected.
+   - **`get_uid`** (2 tests): `projectPath` outside allowed roots
+     rejected; `filePath` containing `..` traversal rejected.
+   - **`read_project_settings`** (1 test): `projectPath` outside
+     allowed roots rejected.
+   - **`modify_project_settings`** (2 tests): `projectPath`
+     outside allowed roots rejected; byte-identical rollback
+     after a rejected write.
+   - **`list_project_files`** (1 test): `projectPath` outside
+     allowed roots rejected.
+   - **`load_sprite`** (3 tests): `projectPath` outside allowed
+     roots rejected; `texturePath` containing `..` traversal
+     rejected; absolute `scenePath` rejected.
+   - **`export_mesh_library`** (3 tests): `projectPath` outside
+     allowed roots rejected; `outputPath` containing `..`
+     traversal rejected; absolute `outputPath` rejected.
+   - **`export_project`** (1 test): `projectPath` outside allowed
+     roots rejected.
+
+   The script invokes the private handler methods directly via
+   `(server as any).handleXxx(args)` (bypassing `tools/call`), the
+   same wiring pattern as `tests/core-file-io-injection.test.ts`,
+   so the gate exercises the live handler dispatch path, not a
+   side-stepped import. Each handler's previously-RED outside-roots
+   or `..`-traversal assertion was confirmed in the RED baseline
+   before the gate was applied.
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every
+  handler, the 5 closed-list profiles, the package identity, the
+  path policy, the runtime bridge, and the MIT attribution;
+- does **not** touch `src/scripts/godot_operations.gd`,
+  `src/scripts/mcp_interaction_server.gd`, the tool registry, the
+  capability policy, the request limiter, the operation runner, the
+  BridgeClient, the upstream `bridge-installer.ts`, the sibling
+  `manage_*` gates, `handleCreateCsharpScript`,
+  `handleCreateProject`, `handleManageAutoloads`,
+  `handleManageInputMap`, `handleManageExportPresets`,
+  `handleValidateScripts`, or any other handler;
+- the only documented contract changes are that `args.projectPath`
+  (and `args.directory` for `list_projects`) MUST now resolve
+  through the canonical `PathPolicy`, matching the strict-input
+  contract the sibling `core_file_io` / `manage_shader` /
+  `set_main_scene` / `manage_translations` gates already enforce.
+  Member paths (`scenePath` / `filePath` / `newPath` /
+  `texturePath` / `outputPath`) MUST now resolve through the
+  canonical `PathPolicy.resolveProjectMember`; the contract is
+  identical to the sibling gates;
+- does not push, publish, create a PR/release, upload a package,
+  write `docs/maintainers/release-candidate.md`, or send the
+  candidate-ready notification.
+
+**Rationale for the seven deferred handlers:**
+
+- `handleRunProject` `args.scene` — runtime Godot CLI argument, not
+  a filesystem path under the project root.
+- `handleCreateProject` — the target path does not yet exist;
+  `assertProject` canonicalization requires an existing path. The
+  handler needs a separate `allowsProject` (rather than
+  `assertProject`) gate plus a downstream write-gate that prevents
+  the new path from leaking outside the configured allowed roots.
+- `handleCreateCsharpScript` — the new script path does not yet
+  exist; same canonicalization mismatch as `handleCreateProject`.
+  The C# gate from Coding-Solo#114 remains the primary gate for
+  this handler.
+- `handleManageAutoloads` / `handleManageInputMap` /
+  `handleManageExportPresets` — straightforward follow-ups with no
+  semantic differences from the pattern applied here. They were
+  intentionally deferred because the sibling content-injection
+  gates already protect against section-breakout and regex-wildcard
+  corruption at the value layer; the `projectPath` lexical
+  boundary in those handlers is the next layer of defense and
+  needs the same canonical-root migration.
+- `handleValidateScripts` — carries the same lexical boundary on
+  `rel` (a relative path produced by `listChangedGdFiles` /
+  `listAllGdFiles`) and needs a separate audit because explicit
+  `args.scriptPaths` user input requires a `resolveProjectMember`
+  gate that is not currently applied.
+
+Source evidence:
+
+- `src/server.ts` is the only modified source file.
+- `tests/info-scene-settings-handler-injection.test.ts` is the only
+  new test file (20 tests).
+- `docs/maintainers/issue-inventory.md` item 22 is the only docs
+  edit.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/info-scene-settings-handler-injection.test.ts`:
+  1 file, 20 tests passed (RED 13/20 confirmed before the fix;
+  GREEN 20/20 after).
+- `npm test`: 44 files, 811 tests passed (was 791 before this
+  package; +20 new tests).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0).
+
+Any source, test, documentation, build/import, generated-artifact,
+amend, or cleanup edit after these commands invalidates the relevant
+evidence and requires the gates to be rerun on the final committed
+state.
+
+## Review state
+
+- The capability-policy package through `37facdf` has an independent
+  NeuralWatt `VERDICT | ACCEPT` with unchanged HEAD/status
+  fingerprints.
+- The network-classification package `79b1d4d` also has an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The round-trip contract package `cbfe594`, the tween-bridge
+  package `2ef0b1a`, the physics-frame `game_wait` package
+  `aff7ca1`, the C# / .NET gate package `ec07f4b`, the autoload
+  injection package `6d76606`, the asset-import-prerequisite
+  package (`88dda1e` / `76c9207`), the Defkil fork package identity
+  rebase `a1cae8b`, the manage-layers / manage-plugins
+  sibling-gate package `3874d81`, the set-main-scene /
+  manage-translations sibling-gate package `6407446`, the
+  manage_shader sibling-gate package `9cd5ac4`, the
+  manage_ci_pipeline / manage_docker_export sibling-gate package
+  `9eef5cd`, the core-file-IO defense-in-depth package
+  `b9fe537`, the script/resource handler defense-in-depth package
+  `383aae3`, the manage_input_map / manage_export_presets
+  sibling-gate package `dc6172e`, and this info / scene / settings /
+  sprite / mesh-library / export PathPolicy gate package are each
+  a focused test file (or test file + minimal handler edits) and do
+  not require an independent NeuralWatt dispatch.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.
+
+## Next safe action
+
+The next bounded package is to extend the canonical-root gate to the
+seven remaining handlers that still carry a lexical `validatePath`
+boundary on `projectPath` (and one inner-loop relative path):
+
+`handleRunProject` `args.scene` (runtime CLI argument, but if a
+canonical resolution becomes available it should adopt
+`pathPolicy.resolveProjectMember`), `handleCreateProject`
+(requires a non-existent-path gate), `handleCreateCsharpScript`
+(requires a non-existent-path gate plus the existing C# / .NET
+gate), `handleManageAutoloads` (project-only gate),
+`handleManageInputMap` (project-only gate),
+`handleManageExportPresets` (project-only gate), and
+`handleValidateScripts` (inner-loop `rel` plus the user-supplied
+`args.scriptPaths` array). Each handler can be ported one at a time
+with a focused wire-level test mirroring
+`tests/info-scene-settings-handler-injection.test.ts`. Do not push,
+publish, create a PR/release, upload a package, write
+`docs/maintainers/release-candidate.md`, or send the
+candidate-ready notification.

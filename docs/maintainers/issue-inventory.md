@@ -197,3 +197,83 @@ Oliver explicitly approves the exact reviewed candidate.
     platform, regex wildcard), 1 benign `add`, 1 precise `remove`,
     1 `list`. The byte-identical rollback assertion is repeated
     after every rejected mutation.
+
+22. The same lexical-`validatePath` defense-in-depth class persisted in
+    ten additional project-file/scene/settings/sprite/mesh-library/
+    export handlers. Each handler historically opened with
+    `if (!validatePath(args.projectPath) || !validatePath(args.<member>))`
+    and then `join(args.projectPath, args.<member>)`-ed the user-supplied
+    values into `existsSync` / `readFileSync` / `writeFileSync` /
+    `executeOperation` / `execFileAsync`. While the request-boundary
+    `assertSafeToolPaths` already rejects every canonical member path
+    that would escape the configured `PathPolicy` roots BEFORE the
+    handler is called, the handler bodies themselves did not formally
+    adopt the canonical-root contract. If a future refactor bypassed
+    the boundary guard (e.g., by invoking a handler outside the
+    standard `CallToolRequest` path, or by a future internal admin
+    tool that routed directly to the handler), the lexical
+    `validatePath` was too weak to enforce the configured
+    allowed-roots list. The ten handlers are: `handleListProjects`
+    (the `args.directory` path), `handleGetProjectInfo`,
+    `handleSaveScene` (project + `scenePath` + optional `newPath`),
+    `handleGetUid` (project + `filePath`), `handleReadProjectSettings`,
+    `handleModifyProjectSettings`, `handleListProjectFiles`,
+    `handleLoadSprite` (project + `scenePath` + `texturePath` —
+    `nodePath` is a runtime scene-graph identifier, not a filesystem
+    path, so it stays unchanged), `handleExportMeshLibrary`
+    (project + `scenePath` + `outputPath`), and `handleExportProject`
+    (project; `outputPath` and `presetName` are runtime arguments to
+    the Godot CLI, not filesystem paths under the project root).
+    `handleRunProject` also dropped its redundant lexical
+    `validatePath(args.projectPath)` because `pathPolicy.allowsProject`
+    and `pathPolicy.assertProject` (already present below it) enforce
+    the same canonical-root contract; its `args.scene` lexical check
+    stays because `args.scene` is a runtime Godot CLI argument, not a
+    filesystem path under the project root. The takeover now applies
+    the same `PathPolicy.assertProject(args.projectPath)` +
+    `PathPolicy.resolveProjectMember(projectRoot, args.<member>)`
+    pattern the sibling `manage_shader` / `set_main_scene` /
+    `manage_translations` / `core_file_io` / `script-resource-handler`
+    gates already use, returning a typed `isError: true` envelope
+    BEFORE any filesystem or subprocess call when either resolution
+    throws. The downstream `handleRunProject` / `manage_input_map` /
+    `manage_export_presets` / `manage_autoloads` /
+    `handleCreateProject` / `handleCreateCsharpScript` /
+    `handleValidateScripts` handlers still carry the lexical
+    boundary; their migration is the next-follow-up release gate.
+    `handleCreateProject` and `handleCreateCsharpScript` are deferred
+    because the target path / script does not yet exist and the
+    `assertProject` canonicalization requires an existing path;
+    `handleCreateProject` will need a separate `allowsProject`
+    (rather than `assertProject`) gate plus a downstream write-gate
+    that prevents the new path from leaking outside the configured
+    allowed roots. `handleRunProject` / `manage_input_map` /
+    `manage_export_presets` / `manage_autoloads` are straightforward
+    follow-ups with no semantic differences from the pattern applied
+    here; `handleValidateScripts` carries the same lexical boundary
+    on `rel` (a relative path produced by `listChangedGdFiles` /
+    `listAllGdFiles`) and needs a separate audit because explicit
+    `args.scriptPaths` user input requires a `resolveProjectMember`
+    gate that is not currently applied. Wire-level coverage in
+    `tests/info-scene-settings-handler-injection.test.ts` (20 tests):
+    10 "outside allowed roots" denials (one per handler, exercised
+    against a `pathPolicy` configured with only the project root),
+    1 `..` traversal denial for `list_projects.directory`, 1 `..`
+    traversal denial for `save_scene.scenePath`, 1 `..` traversal
+    denial for `save_scene.newPath`, 1 `..` traversal denial for
+    `get_uid.filePath`, 1 `..` traversal denial for
+    `load_sprite.texturePath`, 1 `..` traversal denial for
+    `export_mesh_library.outputPath`, 1 absolute-path denial for
+    `save_scene.scenePath`, 1 absolute-path denial for
+    `load_sprite.scenePath`, 1 absolute-path denial for
+    `export_mesh_library.outputPath`, and 1 byte-identical rollback
+    assertion for `modify_project_settings`. The tests invoke the
+    private handler methods directly via `(server as any).handleXxx(args)`
+    (bypassing `tools/call`) to prove the gate lives in the handler
+    body itself, not only in the request-boundary guard. The
+    `handleListProjects` directory scan uses `pathPolicy.allowsProject`
+    (rather than `assertProject`) because the directory may not yet
+    exist; the handler itself creates or walks the tree. The
+    `handleRunProject` cleanup drops the redundant lexical boundary;
+    no test exercises it because `pathPolicy.assertProject` already
+    proves the same contract through every other port.
