@@ -5,8 +5,8 @@
 - Branch: `refactor/senior-takeover`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
 - Current local package: `fix: correct asset import prerequisite classification` (`76c9207`, accepted by independent NeuralWatt review after repairing the prior `88dda1e` REJECT).
-- Current HEAD after the docs reconciliation commit: `d00c4451cfd9a8443f12f70ee83814c476a73c63`.
-- Previous reviewed package commit: `76c9207712dfc9152f809c33a8c59d7131340668`; the docs reconciliation is a separate descendant and did not amend it.
+- Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
+- Previous reviewed documentation commit: `d00c4451cfd9a8443f12f70ee83814c476a73c63`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
 
 ## Current package — modify→read round-trip contract for resource properties
