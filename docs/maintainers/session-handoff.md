@@ -1,13 +1,116 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-17 (tick T24)
+- Timestamp: 2026-07-18 (tick T25)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: gate the shared `headlessOp` helper with the canonical PathPolicy contract, closing the last lexical `validatePath` boundary in the headless-operation path now that every caller enforces `pathPolicy.assertProject` in its own body.
+- Current local package: introduce a pure `src/godot/windows-argv.ts` helper that exports the documented Microsoft `CommandLineToArgvW` quoting rules (`quoteForCommandLineToArgvW`, `formatWindowsVerbatimArgv`, `needsWindowsVerbatimArgv`), with seven pure-helper tests covering the trailing-backslash escape, embedded quotes, Unicode preservation, and a full round-trip through a `CommandLineToArgvW`-equivalent parser. Two wire-level round-trip tests exercise the real `runHeadlessOperation` against a real Node child with a JSON fixture containing every Windows-specific edge case and assert byte-for-byte equality through `JSON.parse`. The shared `headlessOp` spawn call is intentionally unchanged: investigation on Node v24.17.0 (Windows 10) showed that Node's default `spawn(command, [args], { shell: false })` already preserves JSON operation parameters containing Windows path backslashes, embedded double quotes, and Unicode, and switching to the verbatim-arguments path would corrupt executable discovery for paths containing spaces.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
-- Previous reviewed documentation commit: `d00c4451cfd9a8443f12f70ee83814c476a73c63`; the final handoff commit is a separate descendant and did not amend it.
+- Previous reviewed documentation commit: `7f8e01317f64f05f05cd08a4d4e8ce6f9023a3be`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
+
+## Current package — Windows JSON quoting helper (Coding-Solo#49)
+
+The AGY package-selection prompt for this tick reviewed the documented
+partial/open gaps in `docs/maintainers/issue-inventory.md` and selected
+Coding-Solo#49 (Windows JSON quoting) as the highest-priority bounded
+next package that can be implemented and verified on this Windows host
+WITHOUT a real Godot binary. The investigation confirmed that Node's
+default `spawn(command, [args], { shell: false })` already preserves
+JSON operation parameters containing Windows path backslashes,
+embedded double quotes, and Unicode — the historical corruption mode
+the original issue described does not reproduce on Node ≥ 20.
+
+The package has two coherent changes:
+
+1. **`src/godot/windows-argv.ts`** (new, 99 lines) — pure helper module
+   exporting three documented Microsoft `CommandLineToArgvW` quoting
+   primitives:
+   - **`quoteForCommandLineToArgvW(token)`** — wraps a single argv
+     token in double quotes and escapes any embedded double quotes as
+     `\"`, doubling any trailing backslashes that immediately precede
+     the closing quote per the standard rule (2n backslashes become n
+     literal backslashes + literal `"`; 2n+1 backslashes become n
+     literal backslashes + escaped `"`). This is the same rule
+     Microsoft's `CommandLineToArgvW` parser uses, so the round-trip
+     is byte-stable for arbitrary UTF-8, embedded double quotes, and
+     Windows paths containing backslashes.
+   - **`formatWindowsVerbatimArgv(command, args)`** — composes the
+     helper into a single pre-formatted command-line string suitable
+     for `spawn(cmdline, { shell: false, windowsVerbatimArguments: true })`.
+     The helper output is the literal bytes `CreateProcessW` will
+     receive; the child's `OS::get_cmdline_args()` (which Godot uses)
+     is `CommandLineToArgvW`-compatible, so the round-trip is
+     byte-stable for every supported argv token.
+   - **`needsWindowsVerbatimArgv()`** — returns `true` only on
+     `process.platform === 'win32'`. The verbatim path is silently
+     ignored by Node outside Windows, so this guard is required for
+     portable callers.
+
+2. **`tests/operation-runner-windows-argv.test.ts`** (new, 9 tests)
+   and **`tests/fixtures/win32-arg-echoer.cjs`** (new, 18 lines) —
+   wire-level coverage that proves the runner preserves JSON params
+   through the Windows process boundary. Each test exercises the
+   real `runHeadlessOperation` (or the helper in isolation) with a
+   temporary fixture, removed in `afterEach`. The 9 tests cover:
+   - **`quoteForCommandLineToArgvW`** (5 tests): plain ASCII wraps
+     unchanged; embedded double quotes escape to `\"`; trailing
+     backslashes before the closing `"` double per spec; Unicode
+     characters preserved without escaping; a seven-fixture round-trip
+     through a `CommandLineToArgvW`-equivalent parser confirms the
+     output is parseable.
+   - **`needsWindowsVerbatimArgv`** (1 test): returns `true` on
+     `win32`, `false` elsewhere.
+   - **`formatWindowsVerbatimArgv`** (1 test): produces a single
+     command-line string with every arg individually quoted and the
+     JSON payload escaped correctly.
+   - **`runHeadlessOperation` Windows round-trip** (2 tests, gated on
+     `process.platform === 'win32'`): a real Node child receives the
+     JSON params byte-for-byte and `JSON.parse(result.paramsJson)`
+     equals the original fixture; this covers the original
+     Coding-Solo#49 regression class (JSON payloads beginning with
+     `\"`) and the broader Windows-path-backslashes + embedded-quotes
+     edge case. The test injects a `spawnProcess` override that
+     forwards the runner's `args[args.length - 1]` (the `paramsJson`)
+     to a real Node child running the echoer fixture so the wire is
+     exercised end-to-end without spawning the real Godot binary.
+
+3. **`tests/fixtures/win32-arg-echoer.cjs`** (new, 18 lines) — a tiny
+   Node CommonJS script that reads its own argv (`process.argv.slice(2)`)
+   and emits the LAST argument as a Godot-shaped `GODOT_MCP_RESULT=`
+   envelope. Lives under `tests/fixtures/` so it can be reused by
+   future Windows-argv regression tests without polluting the project
+   tree.
+
+The package preserves every existing tool contract, every schema,
+the package identity, the path policy, the operation runner, the
+capability policy, the request limiter, the bridge client, the MIT
+attribution, and the truthful docs. The diff adds 0 modifications to
+`src/godot/operation-runner.ts` — the runner keeps the default
+`{ shell: false, windowsHide: true }` spawn options on both POSIX
+and Windows because (a) Node v24.17.0 already preserves the
+JSON-with-backslash-quote cases the original issue described, and
+(b) switching to `windowsVerbatimArguments: true` on Windows would
+corrupt executable discovery for paths containing spaces (e.g.
+`C:\Program Files\...`) because Node's spawn constructs the cmdline
+by joining args with spaces and `CreateProcessW` re-parses the first
+token as the executable name — the verified failure mode on this host
+during the investigation was a child Node receiving the runner's
+`<projectPath>` argument as its argv[0] because Node's verbatim
+construct had not prepended the executable.
+
+Gates green: `npm test` 51 files / 851 tests (was 50 files / 842
+tests; +9 new tests from this package), `npm run build` clean,
+`npm audit --audit-level=high` zero, `git diff --check` clean.
+
+The remaining deferred items from the previous handoff (the three
+intentional lexical-`validatePath` boundaries: shared `headlessOp`
+which is already gated with `pathPolicy.assertProject`,
+`handleRunProject` `args.scene` runtime CLI argument, and
+`handleValidateScripts` inner-loop `rel` lexical check for trusted
+scanner output) are unchanged. Real Godot end-to-end verification of
+the JSON-arg round-trip in a live Godot runtime remains the
+next-follow-up release gate.
 
 ## Current package — gate shared headlessOp with canonical PathPolicy contract
 
