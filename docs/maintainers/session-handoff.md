@@ -1,13 +1,93 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-17 (tick T23)
+- Timestamp: 2026-07-17 (tick T24)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: repair the committed `handleAttachScript` PathPolicy gate so every downstream consumer receives the canonical project root, and normalize the handoff line endings so the committed range passes `git diff --check`.
+- Current local package: gate the shared `headlessOp` helper with the canonical PathPolicy contract, closing the last lexical `validatePath` boundary in the headless-operation path now that every caller enforces `pathPolicy.assertProject` in its own body.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `d00c4451cfd9a8443f12f70ee83814c476a73c63`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
+
+## Current package — gate shared headlessOp with canonical PathPolicy contract
+
+The previous ten PathPolicy migration packages closed the request-boundary
+`assertSafeToolPaths` guard and the handler-body `pathPolicy.assertProject` +
+`pathPolicy.resolveProjectMember` gate on every `headlessOp` caller
+(`handleAttachScript`, `handleCreateResource`, `handleManageResource`,
+`handleManageSceneSignals`, `handleManageThemeResource`,
+`handleManageSceneStructure`). The shared `headlessOp` helper itself still
+carried the lexical `if (!validatePath(projectPath))` line that only
+rejected empty / `..` / null-byte strings and did not enforce the
+configured `PathPolicy` allowed roots. With every caller now owning its
+own gate, the shared helper is the only remaining lexical boundary in the
+headless-operation path; this package replaces it with
+`this.pathPolicy.assertProject(projectPath)` and a typed `isError: true`
+envelope BEFORE the project-file existence check, BEFORE the operation
+runner spawns Godot, and BEFORE any stderr escapes into the caller.
+
+The package has two coherent changes:
+
+1. **`src/server.ts`** — focused gate addition to the shared `headlessOp`
+   helper, matching the request-boundary `assertSafeToolPaths` guard and
+   every `headlessOp` caller that already enforces `pathPolicy.assertProject`
+   in its own body. Per-handler shape:
+
+   - **`headlessOp`** — replaces the lexical `validatePath(projectPath)`
+     line with `pathPolicy.assertProject(projectPath)` and a typed
+     `Project path is outside the configured allowed roots: …` envelope.
+     The shared helper now canonicalizes the project root and forwards
+     the canonical path into both the existence check and the operation
+     runner, so a non-canonical caller spelling can never reach Godot.
+     The original control flow is preserved: empty `projectPath` still
+     surfaces the existing `projectPath is required` envelope; the
+     canonical root is used in both the existence check and the
+     downstream `executeOperation` call.
+
+   The diff adds no new helper modules, no schema changes, no handler
+   signature changes, no capability policy changes, no BridgeClient
+   changes, no `validatePath` lexical helper changes, and no changes to
+   the request-boundary `assertSafeToolPaths` guard or to any other
+   handler. The `validatePath` import is retained because two deferred
+   call sites still depend on it: `handleRunProject` `args.scene` runtime
+   Godot CLI argument (not a filesystem path under the project root) and
+   the inner-loop lexical `validatePath(rel)` check inside
+   `handleValidateScripts` for trusted internal scanner output.
+
+2. **`tests/headless-op-path-policy-gate.test.ts`** (new, 5 tests) —
+   exercises the real `GodotServer` + `PathPolicy` + `CapabilityPolicy`
+   + the private `headlessOp` method. Each test uses a temporary Godot
+   project under the OS temp directory, removed in `afterEach`. The 5
+   tests cover:
+
+   - **`headlessOp`** (5 tests): `projectPath` outside the configured
+     allowed roots rejected with the canonical-root envelope BEFORE
+     the project-file check (and the `Not a valid Godot project`
+     fallback proven absent); relative `projectPath` that resolves
+     outside the allowed roots via `..` traversal rejected with the
+     canonical-root envelope; absolute `projectPath`
+     (`C:/Windows/System32`) rejected with the canonical-root envelope;
+     empty / undefined `projectPath` still surfaces the existing
+     `projectPath is required` envelope (no regression); the canonical
+     project root is forwarded to the operation runner (no lexical
+     shadowing of `realpathSync`-canonicalised paths).
+
+3. **`tests/handlers.test.ts`** (focused source-text assertion update) —
+   the legacy assertion that previously expected the lexical
+   `validatePath` line inside `headlessOp` is replaced with a new
+   assertion that expects `this.pathPolicy.assertProject(projectPath)`
+   and a comment explaining the contract change. The update is
+   minimal and preserves every other legacy assertion in the suite.
+
+Gates green: `npm test` 842/842 (was 837), `npm run build` clean,
+`npm audit --audit-level=high` zero, `git diff --check` clean.
+
+The remaining deferred items are unchanged: `handleRunProject`
+`args.scene` (runtime Godot CLI argument, not a filesystem path under
+the project root), and the inner-loop lexical `validatePath(rel)`
+check inside `handleValidateScripts` for `listChangedGdFiles` /
+`listAllGdFiles` internal-relative paths (those paths are produced by
+trusted internal scanners, not user input).
 
 ## Current package — handleAttachScript canonical-root forwarding and line-ending repair
 
