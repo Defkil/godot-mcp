@@ -3962,7 +3962,31 @@ Output: ${stdout}` }] };
       this.gameConnection.projectPath = projectPath;
 
       const cmdArgs = ['-d', '--path', projectPath];
-      if (args.scene && validatePath(args.scene)) {
+      // Canonical-member gate (matches the sibling `core_file_io` /
+      // `manage_shader` / `set_main_scene` / `manage_translations` /
+      // `manage_layers` / `manage_plugins` /
+      // `manage_autoloads / manage_input_map / manage_export_presets` /
+      // `manage_scene_signals / manage_theme_resource /
+      // manage_scene_structure` /
+      // `create_project / create_csharp_script / validate_scripts` /
+      // `info / scene / settings / sprite / mesh-library / export` /
+      // `script/resource` / `attach_script` / `headlessOp`
+      // migration): the lexical `validatePath(args.scene)` boundary only
+      // rejected empty / `..` / null-byte strings and let absolute
+      // paths through. Resolve the runtime CLI argument through
+      // `pathPolicy.resolveProjectMember` BEFORE any `spawnProcess`
+      // call so a caller can never pass a `..` traversal or absolute
+      // host path that escapes the project root. The verbatim
+      // `args.scene` (with its native `res://` or relative prefix) is
+      // forwarded into `cmdArgs` so Godot's CLI parser still observes
+      // its documented contract; only the canonical root check fires
+      // first.
+      if (args.scene) {
+        try {
+          this.pathPolicy.resolveProjectMember(projectPath, args.scene);
+        } catch (error: any) {
+          return createErrorResponse(`Invalid scene: ${error?.message ?? 'invalid path.'}`);
+        }
         this.logDebug(`Adding scene parameter: ${args.scene}`);
         cmdArgs.push(args.scene);
       }

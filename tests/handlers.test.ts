@@ -1013,13 +1013,43 @@ describe('Handler source structure', () => {
   });
 
   it('headlessOp validates projectPath through the canonical PathPolicy contract and checks project.godot', () => {
-    expect(sourceCode).toContain("if (!projectPath) return createErrorResponse('projectPath is required.");
+    expect(sourceCode).toContain("if (!projectPath) return createErrorResponse('projectPath is required.');");
     // The shared `headlessOp` helper now resolves the project root through
     // `pathPolicy.assertProject` instead of the lexical `validatePath`
     // boundary, matching every `headlessOp` caller that already enforces
     // the canonical-root contract in its own body.
     expect(sourceCode).toContain('this.pathPolicy.assertProject(projectPath)');
     expect(sourceCode).toContain('project.godot');
+  });
+
+  it('handleRunProject validates args.scene through the canonical PathPolicy contract (no lexical validatePath on user input)', () => {
+    // handleRunProject is the last handler that historically carried a
+    // lexical `validatePath(args.scene)` boundary; the migration replaced
+    // it with `pathPolicy.resolveProjectMember(projectPath, args.scene)`
+    // so `args.scene` cannot escape the project root via `..` traversal
+    // or absolute host paths.
+    const startMarker = 'private async handleRunProject(args: any) {';
+    const startIndex = sourceCode.indexOf(startMarker);
+    expect(startIndex, 'handleRunProject must be present in source').toBeGreaterThanOrEqual(0);
+    // Anchor the body to the next sibling method, which is the documented
+    // "Handle the get_debug_output tool" doc-comment that immediately
+    // precedes handleGetDebugOutput.
+    const nextSiblingMarker = 'Handle the get_debug_output tool';
+    const nextSiblingIndex = sourceCode.indexOf(nextSiblingMarker, startIndex);
+    expect(nextSiblingIndex, 'handleGetDebugOutput marker must follow handleRunProject').toBeGreaterThan(startIndex);
+    const body = sourceCode.substring(startIndex, nextSiblingIndex);
+    expect(body).toContain('pathPolicy.resolveProjectMember(projectPath, args.scene)');
+    // The lexical `validatePath(args.scene)` invocation must NOT remain
+    // as an active code path in `handleRunProject`. Comments that
+    // document the historical boundary are intentionally preserved
+    // (they reference the migration history for future maintainers);
+    // the assertions below only inspect non-comment lines so the
+    // comment trail does not falsely satisfy either condition.
+    const activeLines = body
+      .split('\n')
+      .map(line => line.replace(/\/\/.*$/, ''));
+    expect(activeLines.some(line => line.includes('pathPolicy.resolveProjectMember(projectPath, args.scene)'))).toBe(true);
+    expect(activeLines.some(line => /validatePath\(/.test(line))).toBe(false);
   });
 
   it('gameCommand normalizes parameters', () => {

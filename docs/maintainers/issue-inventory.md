@@ -1,6 +1,6 @@
 # Cross-fork issue inventory
 
-Status date: 2026-07-18
+Status date: 2026-07-19
 
 This inventory is the local source of truth for the takeover of `Defkil/godot-mcp`.
 It covers all 70 issues inventoried across both predecessor repositories (9 immediate-upstream and 61 original-source issues), including closed reports whose fixes may not be ancestors of this fork. An upstream issue being closed is not accepted as proof by itself: inherited fixes receive regression coverage here. The corresponding audit also reviewed 69 pull requests (11 immediate-upstream and 58 original-source). No issue state in a public repository is changed by this work.
@@ -547,4 +547,77 @@ Oliver explicitly approves the exact reviewed candidate.
 
 19. The shared `GodotServer.headlessOp` helper carried the last remaining lexical `validatePath(projectPath)` boundary in the headless-operation path. The boundary only rejected empty / `..` / null-byte strings and did not enforce the configured `PathPolicy` allowed roots, so an external caller that bypassed every handler-body gate (or a future handler added without its own gate) could pass a project root that escaped the configured allowed roots and reach the operation runner with a non-canonical host path. The takeover now replaces the lexical `validatePath(projectPath)` line with `this.pathPolicy.assertProject(projectPath)` and a typed `isError: true` envelope BEFORE the project-file existence check, BEFORE the operation runner spawns Godot, and BEFORE any stderr escapes into the caller. `headlessOp` now canonicalizes the project root and forwards the canonical path into both the existence check and the operation runner, so every caller of the shared helper observes a single source of truth for the canonical-root contract on the headless-operation path. Wire-level coverage in `tests/headless-op-path-policy-gate.test.ts` (5 tests): `projectPath` outside the configured allowed roots is rejected with the canonical-root envelope BEFORE the project-file check; relative `projectPath` that resolves outside the allowed roots via `..` traversal is rejected with the canonical-root envelope; absolute `projectPath` (e.g. `C:/Windows/System32`) is rejected with the canonical-root envelope; empty / undefined `projectPath` still surfaces the existing `projectPath is required` message (no regression); the canonical project root is forwarded to the operation runner (no lexical shadowing of `realpathSync`-canonicalised paths). The `validatePath` helper is retained for the two deferred call sites (`handleRunProject` `args.scene` runtime Godot CLI argument, `handleValidateScripts` inner-loop trusted scanner output) explicitly preserved in the handoff; `tests/handlers.test.ts` updates the legacy source-text assertion that previously expected the lexical `validatePath` line, replacing it with the new `this.pathPolicy.assertProject(projectPath)` contract assertion.
 
-27. [Coding-Solo#49](https://github.com/Coding-Solo/godot-mcp/issues/49) Windows JSON quoting: investigation on this host (Node v24.17.0 on Windows 10) attempted to reproduce the original risk class with several probes and found that Node's default `spawn(command, [args], { shell: false })` already preserves JSON operation parameters containing Windows path backslashes, embedded double quotes, and Unicode — the `args` array is forwarded to `CreateProcessW` via libuv and the child receives each token intact. The historical corruption mode (Node dropping or mangling JSON payloads beginning with `\"`) does not reproduce on Node ≥ 20. Two wire-level round-trip tests in `tests/operation-runner-windows-argv.test.ts` exercise the real `runHeadlessOperation` against a real Node child with a JSON fixture containing every Windows-specific edge case and assert byte-for-byte equality through `JSON.parse`. A pure helper module at `src/godot/windows-argv.ts` exports `quoteForCommandLineToArgvW`, `formatWindowsVerbatimArgv`, and `needsWindowsVerbatimArgv` — the documented Microsoft `CommandLineToArgvW` quoting rules — tested independently with seven pure-helper tests covering the trailing-backslash escape, embedded quotes, Unicode preservation, and a round-trip through a CommandLineToArgvW-equivalent parser. The helper is retained for any future Godot-side consumer (e.g. a custom `.bat` shim or a Godot build with a non-standard argv parser) that needs to construct a Windows-safe command line without going through Node's `windowsVerbatimArguments` path. The shared `headlessOp` spawn call is intentionally unchanged: the default `{ shell: false, windowsHide: true }` options are correct on both POSIX and Windows for every JSON arg the runner has ever produced, and switching to the verbatim-arguments path on Windows would corrupt executable discovery for paths containing spaces (e.g. `C:\Program Files\...`) because Node's `spawn` constructs the cmdline by joining args with spaces and `CreateProcessW` re-parses the first token as the executable name. Real Godot end-to-end verification of the JSON-arg round-trip in a live Godot runtime remains the next-follow-up release gate.
+27. [Coding-Solo#49](https://github.com/Coding-Solo/godot-mcp/issues/49) Windows JSON quoting: investigation on this host (Node v24.17.0 on Windows 10) attempted to reproduce the original risk class with several probes and found that Node's default `spawn(command, [args], { shell: false })` already preserves JSON operation parameters containing Windows path backslashes, embedded double quotes, and Unicode — the `args` array is forwarded to `CreateProcessW` via libuv and the child receives each token intact. The historical corruption mode (Node dropping or mangling JSON payloads beginning with `\“`) does not reproduce on Node ≥ 20. Two wire-level round-trip tests in `tests/operation-runner-windows-argv.test.ts` exercise the real `runHeadlessOperation` against a real Node child with a JSON fixture containing every Windows-specific edge case and assert byte-for-byte equality through `JSON.parse`. A pure helper module at `src/godot/windows-argv.ts` exports `quoteForCommandLineToArgvW`, `formatWindowsVerbatimArgv`, and `needsWindowsVerbatimArgv` — the documented Microsoft `CommandLineToArgvW` quoting rules — tested independently with seven pure-helper tests covering the trailing-backslash escape, embedded quotes, Unicode preservation, and a round-trip through a CommandLineToArgvW-equivalent parser. The helper is retained for any future Godot-side consumer (e.g. a custom `.bat` shim or a Godot build with a non-standard argv parser) that needs to construct a Windows-safe command line without going through Node's `windowsVerbatimArguments` path. The shared `headlessOp` spawn call is intentionally unchanged: the default `{ shell: false, windowsHide: true }` options are correct on both POSIX and Windows for every JSON arg the runner has ever produced, and switching to the verbatim-arguments path on Windows would corrupt executable discovery for paths containing spaces (e.g. `C:\Program Files\...`) because Node's `spawn` constructs the cmdline by joining args with spaces and `CreateProcessW` re-parses the first token as the executable name. Real Godot end-to-end verification of the JSON-arg round-trip in a live Godot runtime remains the next-follow-up release gate.
+
+28. The `handleRunProject.args.scene` lexical `validatePath(args.scene)`
+    boundary was the last remaining user-input `validatePath(...)`
+    call in the source tree. The previous ten PathPolicy migration
+    packages (items 14–27 plus the `handleAttachScript` and
+    `headlessOp` follow-ups) replaced the lexical `validatePath(projectPath)`
+    boundary on every project-member endpoint with
+    `pathPolicy.assertProject(args.projectPath)` +
+    `pathPolicy.resolveProjectMember(projectRoot, args.<member>)` and
+    a typed `isError: true` envelope BEFORE any filesystem or
+    subprocess delegation. `handleRunProject.args.scene` is the
+    runtime Godot CLI argument that flows directly into
+    `spawnProcess(cmdArgs)`. Item 22 explicitly deferred this boundary
+    because it is a CLI argument, not a filesystem path under the
+    project root, but the same defense-in-depth argument that closed
+    the sibling gates applies here: a lexical `validatePath`
+    boundary only rejects empty / `..`-prefixed / null-byte strings
+    and lets absolute host paths through, so a caller could pass
+    `scene = 'C:/Windows/System32/notepad.exe'` (or a
+    `scene = 'res://../etc/passwd'` traversal) and observe the value
+    in `cmdArgs` after the gate silently allowed it. The takeover
+    now applies the same `pathPolicy.resolveProjectMember(projectPath,
+    args.scene)` canonical-member gate the sibling
+    `create_csharp_script` / `manage_scene_signals` /
+    `manage_theme_resource` / `manage_scene_structure` / core
+    `script-resource` gates already use, returning a typed
+    `isError: true` envelope (`Invalid scene: ...`) BEFORE any
+    `spawnProcess` call. The verbatim `args.scene` (with its native
+    `res://` or relative prefix) is forwarded into `cmdArgs` so
+    Godot's CLI parser still observes its documented contract; only
+    the canonical-root / canonical-member check fires first. The
+    `validatePath` helper is intentionally retained for the
+    `handleValidateScripts` inner-loop trusted scanner output
+    (line 7062), which deals with internal relative paths produced
+    by `listChangedGdFiles` / `listAllGdFiles`, not user input.
+    Wire-level coverage in
+    `tests/run-project-scene-pathpolicy-gate.test.ts` (4 tests):
+    `args.scene` whose canonical realpath would escape the project
+    root via `..` traversal (caught by
+    `pathPolicy.resolveProjectMember`); `args.scene` that is an
+    absolute host path outside the project root (`C:/Windows/...`)
+    caught by the canonical-member contract; `args.scene` mixing
+    forward and back slashes in a `..` traversal rejected by the
+    canonical-member contract; benign `args.scene = 'res://scenes/Main.tscn'`
+    accepted and forwarded verbatim into `spawnProcess` cmdArgs.
+    Every rejection test stubs `spawnProcess` to assert the gate
+    fires BEFORE any process spawn. The accept test stubs
+    `spawnProcess`, `stopActiveProcess`,
+    `allocateRuntimeCredentials`, `runtimeEnvironment`,
+    `injectInteractionServer`, `observeStartup`, and the
+    runtimeConnector so the happy path returns without spawning
+    Godot; `cmdArgs` is asserted to contain the verbatim
+    `args.scene` so a future maintainer cannot silently drop or
+    rewrite the runtime CLI argument. The tests invoke the private
+    handler method directly via
+    `(server as any).handleRunProject(args)` (bypassing
+    `tools/call`), mirroring the sibling
+    `attach-script-handler-injection` /
+    `manage-scene-signals-theme-resource-scene-structure-handler-injection`
+    gate patterns. `tests/handlers.test.ts` adds a focused
+    source-text assertion (handler-source-structure test) that
+    inspects only non-comment lines of `handleRunProject` and
+    confirms both that `pathPolicy.resolveProjectMember(projectPath,
+    args.scene)` is present and that no active-code
+    `validatePath(...)` invocation remains in `handleRunProject`.
+
+    The deferred lexical `validatePath` callers in
+    `handleValidateScripts` (line 7062 / line 7200) remain the
+    next-follow-up because they operate on internal relative
+    paths from `listChangedGdFiles` / `listAllGdFiles` (trusted
+    internal scanners), not user input; explicit
+    `args.scriptPaths` user input is already gated by
+    `pathPolicy.resolveProjectMember` from item 25.
