@@ -1012,10 +1012,14 @@ describe('Handler source structure', () => {
     expect(sourceCode).toContain("if (!this.gameConnection.connected) return createErrorResponse('Not connected");
   });
 
-  it('headlessOp validates projectPath and checks project.godot', () => {
+  it('headlessOp validates projectPath through the canonical PathPolicy contract and checks project.godot', () => {
     expect(sourceCode).toContain("if (!projectPath) return createErrorResponse('projectPath is required.");
-    expect(sourceCode).toContain("if (!validatePath(projectPath)) return createErrorResponse('Invalid path.");
-    expect(sourceCode).toContain("project.godot");
+    // The shared `headlessOp` helper now resolves the project root through
+    // `pathPolicy.assertProject` instead of the lexical `validatePath`
+    // boundary, matching every `headlessOp` caller that already enforces
+    // the canonical-root contract in its own body.
+    expect(sourceCode).toContain('this.pathPolicy.assertProject(projectPath)');
+    expect(sourceCode).toContain('project.godot');
   });
 
   it('gameCommand normalizes parameters', () => {

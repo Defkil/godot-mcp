@@ -678,14 +678,31 @@ export class GodotServer {
     const { projectPath, params } = argsFn(args);
 
     if (!projectPath) return createErrorResponse('projectPath is required.');
-    if (!validatePath(projectPath)) return createErrorResponse('Invalid path.');
+    // Canonical-root gate (matches the request-boundary `assertSafeToolPaths`
+    // guard and every `headlessOp` caller that already enforces
+    // `pathPolicy.assertProject` in its own body — `handleAttachScript`,
+    // `handleCreateResource`, `handleManageResource`, `handleManageSceneSignals`,
+    // `handleManageThemeResource`, `handleManageSceneStructure`): the lexical
+    // `validatePath` boundary only rejected empty / `..` / null-byte strings
+    // and did not enforce the configured `PathPolicy` allowed roots. Resolving
+    // the project root through `pathPolicy.assertProject` makes the shared
+    // headless helper the single source of truth for the canonical-root
+    // contract on every operation it touches.
+    let projectRoot: string;
+    try {
+      projectRoot = this.pathPolicy.assertProject(projectPath);
+    } catch (error: any) {
+      return createErrorResponse(`Project path is outside the configured allowed roots: ${error?.message ?? 'invalid path.'}`);
+    }
 
-    const projectFile = join(projectPath, 'project.godot');
-    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${projectPath}`);
+    const projectFile = join(projectRoot, 'project.godot');
+    if (!existsSync(projectFile)) return createErrorResponse(`Not a valid Godot project: ${projectRoot}`);
 
     try {
-      const { stdout } = await this.executeOperation(operation, params, projectPath);
-      return { content: [{ type: 'text', text: `${operation} succeeded.\n\nOutput: ${stdout}` }] };
+      const { stdout } = await this.executeOperation(operation, params, projectRoot);
+      return { content: [{ type: 'text', text: `${operation} succeeded.
+
+Output: ${stdout}` }] };
     } catch (error: any) {
       return createErrorResponse(`${operation} failed: ${error?.message || 'Unknown error'}`);
     }
