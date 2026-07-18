@@ -75,12 +75,12 @@ The package has two coherent changes:
      to a real Node child running the echoer fixture so the wire is
      exercised end-to-end without spawning the real Godot binary.
 
-3. **`tests/fixtures/win32-arg-echoer.cjs`** (new, 18 lines) — a tiny
-   Node CommonJS script that reads its own argv (`process.argv.slice(2)`)
-   and emits the LAST argument as a Godot-shaped `GODOT_MCP_RESULT=`
-   envelope. Lives under `tests/fixtures/` so it can be reused by
-   future Windows-argv regression tests without polluting the project
-   tree.
+3. **`tests/fixtures/win32-arg-echoer.cjs`** (new, 18 lines including
+   the final newline) — a tiny Node CommonJS script that reads its
+   own argv (`process.argv.slice(2)`) and emits the LAST argument as
+   a Godot-shaped `GODOT_MCP_RESULT=` envelope. Lives under
+   `tests/fixtures/` so it can be reused by future Windows-argv
+   regression tests without polluting the project tree.
 
 The package preserves every existing tool contract, every schema,
 the package identity, the path policy, the operation runner, the
