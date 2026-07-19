@@ -2023,10 +2023,11 @@ describe('Tool dispatch routing', () => {
     // dispatch path and no longer appear as legacy `case` statements:
     // `read_scene`, `modify_scene_node`, `remove_scene_node`,
     // `classdb_inspect`, `get_project_info`, `read_project_settings`,
-    // `read_file`, `write_file`, `delete_file`, and `create_directory`.
-    // The previous count was 146; tick T34 (create_directory registry
-    // migration) reduces the legacy surface to 145.
-    expect(matches.length).toBe(145);
+    // `read_file`, `write_file`, `delete_file`, `create_directory`, and
+    // `list_projects`. The previous count was 145; tick T35
+    // (list_projects registry migration) reduces the legacy surface to
+    // 144.
+    expect(matches.length).toBe(144);
   });
 
   it('does not let a legacy case fall through', () => {

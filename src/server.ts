@@ -1274,6 +1274,29 @@ Output: ${stdout}` }] };
       },
       handler: args => this.handleCreateDirectory(args),
     });
+    // list_projects now derives schema, capability, and dispatch from the
+    // registry while preserving the existing handler contract (canonical-root
+    // PathPolicy gate, recursive walk, JSON envelope).
+    this.toolRegistry.register({
+      name: 'list_projects',
+      description: 'List Godot projects in a directory',
+      capability: 'inspect',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          directory: {
+            type: 'string',
+            description: 'Directory to search for Godot projects',
+          },
+          recursive: {
+            type: 'boolean',
+            description: 'Whether to search recursively (default: false)',
+          },
+        },
+        required: ['directory'],
+      },
+      handler: args => this.handleListProjects(args),
+    });
 
     // Define available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -1323,25 +1346,7 @@ Output: ${stdout}` }] };
             required: [],
           },
         },
-        {
-          name: 'list_projects',
-          description: 'List Godot projects in a directory',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              directory: {
-                type: 'string',
-                description: 'Directory to search for Godot projects',
-              },
-              recursive: {
-                type: 'boolean',
-                description: 'Whether to search recursively (default: false)',
-              },
-            },
-            required: ['directory'],
-          },
-        },
-        {
+{
           name: 'create_scene',
           description: 'Create a new Godot scene file',
           inputSchema: {
@@ -3628,8 +3633,6 @@ Output: ${stdout}` }] };
       return await this.handleStopProject();
     case 'get_godot_version':
       return await this.handleGetGodotVersion();
-    case 'list_projects':
-      return await this.handleListProjects(request.params.arguments);
     case 'create_scene':
       return await this.handleCreateScene(request.params.arguments);
     case 'add_node':

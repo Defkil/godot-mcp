@@ -27,10 +27,10 @@ describe('MCP schema and dispatch parity', () => {
     );
     const names = response.tools.map((tool: { name: string }) => tool.name);
 
-    // 145 legacy contracts + the migrated/registered tools: modify_project_settings,
+    // 144 legacy contracts + the migrated/registered tools: modify_project_settings,
     // list_project_files, launch_editor, read_scene, modify_scene_node,
     // remove_scene_node, classdb_inspect, get_project_info, read_project_settings,
-    // read_file, write_file, delete_file, create_directory.
+    // read_file, write_file, delete_file, create_directory, list_projects.
     expect(names).toHaveLength(158);
     expect(new Set(names).size).toBe(158);
     expect(names.filter((name: string) => name === 'list_project_files')).toHaveLength(1);
@@ -46,6 +46,7 @@ describe('MCP schema and dispatch parity', () => {
     expect(names.filter((name: string) => name === 'write_file')).toHaveLength(1);
     expect(names.filter((name: string) => name === 'delete_file')).toHaveLength(1);
     expect(names.filter((name: string) => name === 'create_directory')).toHaveLength(1);
+    expect(names.filter((name: string) => name === 'list_projects')).toHaveLength(1);
     expect((server as any).toolRegistry.definitions().map((tool: { name: string }) => tool.name))
       .toEqual([
         'modify_project_settings',
@@ -61,6 +62,7 @@ describe('MCP schema and dispatch parity', () => {
         'write_file',
         'delete_file',
         'create_directory',
+        'list_projects',
       ]);
     expect((server as any).toolRegistry.capabilityFor('modify_project_settings')).toBe('edit');
     expect((server as any).toolRegistry.capabilityFor('modify_scene_node')).toBe('edit');
@@ -74,6 +76,7 @@ describe('MCP schema and dispatch parity', () => {
     expect((server as any).toolRegistry.capabilityFor('write_file')).toBe('edit');
     expect((server as any).toolRegistry.capabilityFor('delete_file')).toBe('edit');
     expect((server as any).toolRegistry.capabilityFor('create_directory')).toBe('edit');
+    expect((server as any).toolRegistry.capabilityFor('list_projects')).toBe('inspect');
   });
 
   it('executes the migrated project-settings mutation through the real MCP call boundary', async () => {

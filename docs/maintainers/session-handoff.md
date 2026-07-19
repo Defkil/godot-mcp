@@ -1,13 +1,52 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-19 (tick T34)
+- Timestamp: 2026-07-19 (tick T35)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: tick T34 migrated `create_directory` to the typed tool registry with capability `edit`, preserving the `projectPath` + `directoryPath` schema, the private handler body, the canonical PathPolicy (assertProject + resolveProjectMember) already enforced in the handler, the `project.godot` existence check, the `mkdirSync` recursive call, and the exact `Directory created: ${args.directoryPath}` success envelope. The legacy flat-list block and the `case 'create_directory':` switch arm are removed together. TDD evidence: focused RED failed (registry ownership missing, dispatch contract missing, legacy case still present), then GREEN passed 7/7 in `tests/registry-migration-create-directory.test.ts`. The full canonical suite in `tests/handlers.test.ts`, `tests/schema-parity.test.ts`, `tests/tool-definitions.test.ts`, and the focused file-I/O / asset-import / script-resource injection suites now reflect the new count. Final gates: focused 7/7; full 895/895 (was 888 baseline + 7 new tests); build pass; audit zero; CRLF-aware diff-check pass. Nothing was pushed or published.
+- Current local package: tick T35 migrated `list_projects` to the typed tool registry with capability `inspect`, preserving the `directory` + `recursive` schema, the private handler body, the canonical PathPolicy `pathPolicy.allowsProject(directory)` gate, the `existsSync` precondition, the `findGodotProjects` recursive walk, and the exact `JSON.stringify(projects, null, 2)` success envelope. The legacy flat-list block and the `case 'list_projects':` switch arm are removed together. TDD evidence: focused RED failed (registry ownership missing + legacy case still present + duplicate flat-list block), then GREEN passed 8/8 in `tests/registry-migration-list-projects.test.ts`. The full canonical suite in `tests/handlers.test.ts`, `tests/schema-parity.test.ts`, `tests/tool-definitions.test.ts`, and the focused file-I/O / asset-import / script-resource injection suites now reflect the new count. Final gates: focused 8/8; full 903/903 (was 895 baseline + 8 new tests); build pass; audit zero; CRLF-aware diff-check pass. Nothing was pushed or published.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `7503383ace0ad0fb28d47915deff1b0b024197e8` (tick T33 docs); the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
+
+## Current package — list_projects registry migration (tick T35)
+
+- Register `list_projects` with capability `inspect`; remove only its
+  legacy flat-list block and `case 'list_projects':` switch arm;
+  preserve the private `handleListProjects` body, the canonical
+  PathPolicy `pathPolicy.allowsProject(directory)` gate, the
+  `existsSync` precondition, the `findGodotProjects` recursive walk,
+  and the exact `JSON.stringify(projects, null, 2)` success envelope.
+- Add eight wire-level tests in
+  `tests/registry-migration-list-projects.test.ts`: registry ownership
+  + capability, exact schema, advertised uniqueness, real MCP
+  `tools/call` dispatch + byte-exact fixture walk (two `project.godot`
+  children found by name + path), empty-directory result, `directory`
+  outside the configured allowed roots denied, missing `directory`
+  argument denied, legacy `case` removal, and flat-list block
+  uniqueness (exactly one `name: 'list_projects'` source occurrence,
+  inside the registry).
+- Update `tests/schema-parity.test.ts` (registered definition list,
+  capability map, advertised name uniqueness) and
+  `tests/tool-definitions.test.ts` (`migratedTools` set) to include
+  `list_projects`; update `tests/handlers.test.ts` "routes every
+  remaining legacy case to a handler" to assert 144 instead of 145.
+- Update `docs/maintainers/issue-inventory.md` `tugcantopaloglu#12`
+  row: 14 migrated tools, 158 advertised names, 144 legacy `case`
+  statements + 144 flat-list entries.
+- Verified before commit: focused 8/8, full 903/903 (was 895 baseline
+  + 8 new tests), build pass, audit zero, and
+  `git -c core.whitespace=cr-at-eol diff --check` pass. No real-Godot
+  claim: this bounded migration exercises registry dispatch +
+  PathPolicy through the real MCP `tools/list` and `tools/call`
+  boundary against a temporary parent directory under the OS temp
+  directory; it does not launch Godot.
+- No independent reviewer verdict yet for tick T35; this commit only
+  records the implementation + focused/full gate evidence and the
+  matching handoff update. The next tick will route a focused
+  NeuralWatt review of the T35 candidate commit.
+- No push, publication, PR, release, package upload, or
+  candidate-ready notification.
 
 ## Current package — create_directory registry migration (tick T34)
 
