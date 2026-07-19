@@ -4,7 +4,7 @@
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: tick T29 migrated the next legacy handler, `get_project_info`, to the typed tool registry. The package is a small, bounded incremental step that closes one legacy `case` statement and the matching flat-list block entry while preserving every contract of the existing handler body (PathPolicy `assertProject` on `args.projectPath`, `project.godot` existence check, `getProjectStructureAsync` walker, `isDotnetProject` flag, `execFileAsync(godotPath, ['--version'])` Godot-version probe, and the same JSON response envelope). Canonical gates re-run after the package: `npm test` 53 files / 860 tests pass (was 52 / 855; +1 file, +5 tests), `npm run build` exit 0, `npm audit --audit-level=high` 0 vulnerabilities, `git diff --check` exit 0. The previously-claimed tick-T28 NeuralWatt `VERDICT | ACCEPT` review of `0018e29..de74146` is unchanged; no fresh NeuralWatt dispatch is required for a focused single-handler dispatcher refactor. Previous recorded package: retire the last active-code lexical `validatePath(...)` boundary by gating `handleValidateScripts` inner-loop scanner output through the canonical `pathPolicy.resolveProjectMember(projectRoot, rel)` contract, then delete the `validatePath` helper from `src/utils.ts`.
+- Current local package: tick T29 migrated the next legacy handler, `get_project_info`, to the typed tool registry. The package is a small, bounded incremental step that closes one legacy `case` statement and the matching flat-list block entry while preserving every contract of the existing handler body (PathPolicy `assertProject` on `args.projectPath`, `project.godot` existence check, `getProjectStructureAsync` walker, `isDotnetProject` flag, `execFileAsync(godotPath, ['--version'])` Godot-version probe, and the same JSON response envelope). An independent NeuralWatt packet-only review of the substantive commit `e9f73a4` returned `VERDICT | ACCEPT` with `validFingerprint: true` (pre/post `HEAD` and `git status --porcelain` match) and a persisted result file at `C:/Users/mail/AppData/Local/agent-runtime/state/neuralwatt-godot-mcp-e9f73a4-result.json`. The reviewer verified criterion-by-criterion: registry block (`src/server.ts:1128-1144`), legacy case + flat-list removal, verbatim `handleGetProjectInfo` body preservation, focused wire-level test (`tests/registry-migration-get-project-info.test.ts` 5 tests), test-fixture decrements (8 migrated tools, 158 unique advertised, 150 legacy `case` count), and docs truthfulness (`docs/maintainers/issue-inventory.md` [tugcantopaloglu#12] row + handoff section). One non-blocking observation was reported: the narrative baseline "The previous count was 154" in `tests/handlers.test.ts:2014` was inconsistent with the true 151→150 delta. The docs-only follow-up commit `5dcf6f1` corrected the narrative baseline to 151 so the surrounding comment matches the executable `expect(matches.length).toBe(150)` assertion. Canonical gates re-run after the docs-only follow-up: `npm test` 53 files / 860 tests pass, `npm run build` exit 0, `npm audit --audit-level=high` 0 vulnerabilities, `git diff --check` (Windows LF/CRLF notice). Previous recorded package: retire the last active-code lexical `validatePath(...)` boundary by gating `handleValidateScripts` inner-loop scanner output through the canonical `pathPolicy.resolveProjectMember(projectRoot, rel)` contract, then delete the `validatePath` helper from `src/utils.ts`.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `7f8e01317f64f05f05cd08a4d4e8ce6f9023a3be`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
@@ -1230,10 +1230,23 @@ be rerun on the final committed state.
   `383aae3`, the manage_input_map / manage_export_presets
   sibling-gate package `dc6172e`, the info / scene / settings /
   sprite / mesh-library / export PathPolicy gate package
-  `446964b`, and this manage_autoloads / manage_input_map /
-  manage_export_presets PathPolicy gate package are each a focused
-  test file (or test file + minimal handler edits) and do not
-  require an independent NeuralWatt dispatch.
+  `446964b`, the manage_autoloads / manage_input_map /
+  manage_export_presets PathPolicy gate package `571ef14`,
+  the manage_scene_signals / manage_theme_resource /
+  manage_scene_structure PathPolicy gate package `e66cc77`,
+  the create_project / create_csharp_script /
+  validate_scripts PathPolicy gate package `b9fe537`
+  (refactor/attach-script), the handleAttachScript PathPolicy
+  gate package `cecd0c4`, the headlessOp PathPolicy gate
+  package `732d757`, the handleValidateScripts inner-loop
+  PathPolicy gate and `validatePath` retirement package
+  `0018e29`, and the tick T29 `get_project_info` registry
+  migration package `e9f73a4` are each a focused test file
+  (or test file + minimal handler edits) and do not require
+  an independent NeuralWatt dispatch as a baseline; the
+  `e9f73a4` substantive commit received an independent
+  packet-only NeuralWatt `VERDICT | ACCEPT` review in this
+  same tick.
 - No Claude model was invoked.
 - No release-candidate file or candidate-ready notification exists.
 
