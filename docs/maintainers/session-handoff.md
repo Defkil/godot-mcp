@@ -3564,6 +3564,18 @@ committed state.
   NeuralWatt `VERDICT | ACCEPT` with unchanged HEAD/status
   fingerprints and the non-blocking observations have already been
   resolved in `625ae08`.
+- **This package (`0018e29`)** — the `handleValidateScripts inner-loop
+  PathPolicy gate and validatePath retirement` — received an
+  independent NeuralWatt `VERDICT | ACCEPT` with no blocking findings
+  and unchanged HEAD/status fingerprints. The reviewer verified: (a)
+  the inner-loop `pathPolicy.resolveProjectMember(projectRoot, rel)`
+  gate fires BEFORE `existsSync` / `runGdScriptCheck`; (b) the
+  canonical realpath is forwarded into both downstream sinks; (c) the
+  response contract preserves the original `rel` form at every push
+  site; (d) the `validatePath` export is removed from `src/utils.ts`;
+  (e) `tests/handlers.test.ts`'s `fakeHeadlessOp` mirrors the
+  production `headlessOp` behavior; (f) no Claude or Anthropic
+  identity is referenced; (g) `package.json` has no new dependencies.
 - The focused test-file packages (round-trip contract `cbfe594`,
   tween bridge `2ef0b1a`, physics-frame `game_wait` `aff7ca1`,
   C# / .NET gate `ec07f4b`, autoload injection `6d76606`,
@@ -3584,11 +3596,10 @@ committed state.
   PathPolicy gate `fa766a2`, handleAttachScript canonical-root
   forwarding `a22c559`, shared `headlessOp` PathPolicy gate
   `732d757`, `handleRunProject args.scene` PathPolicy gate
-  `250acb5`, and this `handleValidateScripts inner-loop
-  PathPolicy gate and validatePath retirement` package) are each a
-  focused test file (or test file + minimal handler edits + helper
-  retirement) and do not require an independent NeuralWatt dispatch
-  on every package.
+  `250acb5`) are each a focused test file (or test file + minimal
+  handler edits + helper retirement) and are now joined by this
+  `handleValidateScripts inner-loop PathPolicy gate and validatePath
+  retirement` package (`0018e29`).
 - No Claude model was invoked.
 - No release-candidate file or candidate-ready notification exists.
 
