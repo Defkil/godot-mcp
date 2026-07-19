@@ -1,13 +1,22 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-19 (tick T31)
+- Timestamp: 2026-07-19 (tick T32)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: tick T31 migrated `read_file` to the typed tool registry with capability `inspect`, preserving the `projectPath` + `filePath` schema, the private handler body, the structured `{type:'text',text}` readback, and the canonical PathPolicy (assertProject + resolveProjectMember) already enforced in the handler. The legacy flat-list block and the `case 'read_file':` switch arm are removed together. TDD evidence: focused RED failed 2/7 against the un-migrated source, then GREEN passed 7/7 in `tests/registry-migration-read-file.test.ts`. The full canonical suite in `tests/handlers.test.ts`, `tests/schema-parity.test.ts`, `tests/tool-definitions.test.ts`, and the focused file-I/O / asset-import / script-resource injection suites now reflect the new count. Final gates: focused 7/7; full 874/874; build pass; audit zero; diff-check clean. Nothing was pushed or published.
+- Current local package: tick T32 migrated `write_file` to the typed tool registry with capability `edit`, preserving the `projectPath` + `filePath` + `content` schema, the private handler body, the canonical PathPolicy (assertProject + resolveProjectMember) already enforced in the handler, the `project.godot` existence check, and the exact `File written: ${args.filePath}` success envelope. The legacy flat-list block and the `case 'write_file':` switch arm are removed together. TDD evidence: focused RED failed 2/7 against the un-migrated source (registry ownership missing, legacy case still present), then GREEN passed 7/7 in `tests/registry-migration-write-file.test.ts`. The full canonical suite in `tests/handlers.test.ts`, `tests/schema-parity.test.ts`, `tests/tool-definitions.test.ts`, `tests/registry-migration-read-file.test.ts`, and the focused file-I/O / asset-import / script-resource injection suites now reflect the new count. Final gates: focused 7/7; full 881/881; build pass; audit zero; CRLF-aware diff-check pass. Nothing was pushed or published.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
-- Previous reviewed documentation commit: `7f8e01317f64f05f05cd08a4d4e8ce6f9023a3be`; the final handoff commit is a separate descendant and did not amend it.
+- Previous reviewed documentation commit: `9b4fc206ca07f70ae114dfb7e7eb69242cd86dbc`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
+
+## Current package — write_file registry migration (tick T32)
+
+- Register `write_file` with capability `edit`; remove only its legacy flat-list block and switch case; preserve the private handler body, the canonical `PathPolicy` gate, the `project.godot` existence check, the `mkdirSync` parent-directory guarantee, and the exact `File written: ${args.filePath}` success envelope.
+- Add seven wire-level tests in `tests/registry-migration-write-file.test.ts` for registry ownership + capability, exact schema, advertised uniqueness, real MCP `tools/call` dispatch + byte-exact writeback (file lands at the canonical `<projectRoot>/<filePath>`), `filePath` PathPolicy denial, `projectPath` outside-allowed-roots denial, legacy case-statement removal, and flat-list block uniqueness (exactly one `name: 'write_file'` source occurrence, inside the registry).
+- Update `tests/schema-parity.test.ts` (registered definition list, capability map, advertised name uniqueness) and `tests/tool-definitions.test.ts` (`migratedTools` set) to include `write_file`; update `tests/handlers.test.ts` "routes every remaining legacy case to a handler" to assert 147 instead of 148.
+- Update `docs/maintainers/issue-inventory.md` `tugcantopaloglu#12` row: 11 migrated tools, 158 advertised names, 147 legacy `case` statements + 147 flat-list entries.
+- Verified before commit: focused 7/7, full 881/881, build pass, audit zero, and `git -c core.whitespace=cr-at-eol diff --check` pass (the repository tracks these maintainer Markdown files with CRLF blobs, so the Windows `cr-at-eol` rule is required to avoid false trailing-whitespace reports). No real-Godot claim: this bounded migration exercises registry dispatch + PathPolicy through the real MCP `tools/list` and `tools/call` boundary against a temporary Godot project under the OS temp directory; it does not launch Godot.
+- No push, publication, PR, release, package upload, or candidate-ready notification.
 
 ## Current package — read_file registry migration (tick T31)
 

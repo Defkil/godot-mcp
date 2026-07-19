@@ -2011,9 +2011,9 @@ describe('Tool dispatch routing', () => {
     // dispatch path and no longer appear as legacy `case` statements:
     // `read_scene`, `modify_scene_node`, `remove_scene_node`,
     // `classdb_inspect`, `get_project_info`, `read_project_settings`,
-    // and `read_file`. The previous count was 150; tick T31 (read_file
-    // registry migration) reduces the legacy surface to 148.
-    expect(matches.length).toBe(148);
+    // `read_file`, and `write_file`. The previous count was 150; tick T32
+    // (write_file registry migration) reduces the legacy surface to 147.
+    expect(matches.length).toBe(147);
   });
 
   it('does not let a legacy case fall through', () => {

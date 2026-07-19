@@ -1204,11 +1204,36 @@ Output: ${stdout}` }] };
       },
       handler: args => this.handleReadFile(args),
     });
+    // `write_file` now derives schema, capability, and dispatch from the
+    // registry while preserving the existing handler contract.
+    this.toolRegistry.register({
+      name: 'write_file',
+      description: 'Create or overwrite a text file in a Godot project',
+      capability: 'edit',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Godot project path',
+          },
+          filePath: {
+            type: 'string',
+            description: 'File path relative to project root',
+          },
+          content: {
+            type: 'string',
+            description: 'File content to write',
+          },
+        },
+        required: ['projectPath', 'filePath', 'content'],
+      },
+      handler: args => this.handleWriteFile(args),
+    });
 
     // Define available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
-
         {
           name: 'run_project',
           description: 'Run the Godot project and capture output',
@@ -1850,20 +1875,7 @@ Output: ${stdout}` }] };
             required: ['projectPath', 'resourceType', 'resourcePath'],
           },
         },
-        // File I/O tools
-        {
-          name: 'write_file',
-          description: 'Create or overwrite a text file in a Godot project',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: { type: 'string', description: 'Godot project path' },
-              filePath: { type: 'string', description: 'File path relative to project root' },
-              content: { type: 'string', description: 'File content to write' },
-            },
-            required: ['projectPath', 'filePath', 'content'],
-          },
-        },
+        // File I/O tools (migrated definitions are supplied by toolRegistry)
         {
           name: 'delete_file',
           description: 'Delete a file from a Godot project',
@@ -3670,9 +3682,7 @@ Output: ${stdout}` }] };
       return await this.handleAttachScript(request.params.arguments);
     case 'create_resource':
       return await this.handleCreateResource(request.params.arguments);
-    // File I/O tools
-    case 'write_file':
-      return await this.handleWriteFile(request.params.arguments);
+    // File I/O tools (read_file and write_file use the registry path)
     case 'delete_file':
       return await this.handleDeleteFile(request.params.arguments);
     case 'create_directory':
