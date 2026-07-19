@@ -1,13 +1,30 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-19 (tick T37)
+- Timestamp: 2026-07-19 (tick T38)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: tick T37 migrated `game_connect_signal` to the typed tool registry with capability `edit`, preserving the exact legacy description, input schema, and `handleGameConnectSignal` body (the `nodePath`/`signalName`/`targetPath`/`method` precondition that returns `nodePath, signalName, targetPath, and method are required.` on miss, the bridge `connect_signal` command and the `JSON.stringify(response, null, 2)` envelope). The legacy flat-list block (Batch 1: Signals) and the `case 'game_connect_signal':` switch arm are removed together. TDD evidence: focused RED failed (registry ownership missing + legacy case still present + duplicate flat-list block), then GREEN passed 6/6 in `tests/registry-migration-game-connect-signal.test.ts`. The full canonical suite in `tests/handlers.test.ts`, `tests/schema-parity.test.ts`, `tests/tool-definitions.test.ts`, and the focused file-I/O / PathPolicy / capability-policy suites now reflect the new count. Final gates: focused 6/6; full 917/917 (was 911 baseline + 6 new tests); build pass; audit zero; CRLF-aware diff-check pass. Nothing was pushed or published.
+- Current local package: tick T38 migrates `game_disconnect_signal` to the typed tool registry with capability `edit`, preserving the exact legacy description, schema, private handler, missing-argument wording, `disconnect_signal` bridge mapping, snake_case parameters, and JSON success envelope. The focused RED failed 2/6 because registry ownership was absent and the legacy switch case remained; the minimal production change then passed focused GREEN 6/6. Final canonical gates are recorded in the T38 section below. Nothing was pushed or published; Git HEAD and status are authoritative for local commit state, and external review evidence will be recorded only after a real verdict.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `af988ca8a3b12877e3f7bac6de8978d582e06776` (tick T34 docs); the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
+
+## Current package — game_disconnect_signal registry migration (tick T38)
+
+- Register `game_disconnect_signal` immediately after `game_connect_signal`
+  with capability `edit`; remove only its legacy flat-list block and switch
+  arm while preserving the private handler and wire behavior. Real MCP
+  `tools/list` and `tools/call` coverage asserts exact schema, one advertised
+  name in the preserved connect → disconnect → emit order, exact
+  `disconnect_signal` command + snake_case params + success envelope, and the
+  exact missing-argument error.
+- Update the current parity inventories to 17 registered tools, 141 legacy
+  cases, 141 flat-list entries, and 158 unique advertised tools.
+- TDD evidence: focused RED 2 failed / 4 passed for the expected missing
+  registry ownership and retained legacy case; focused GREEN passed 6/6.
+  Final gates: full 923/923 (917 prior + 6 new), build pass, audit found zero
+  vulnerabilities, and `git -c core.whitespace=cr-at-eol diff --check` pass.
+  No external review is claimed.
 
 ## Current package — game_connect_signal registry migration (tick T37)
 

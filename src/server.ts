@@ -1361,6 +1361,22 @@ Output: ${stdout}` }] };
       },
       handler: args => this.handleGameConnectSignal(args),
     });
+    this.toolRegistry.register({
+      name: 'game_disconnect_signal',
+      description: 'Disconnect a signal connection in the running game',
+      capability: 'edit',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          nodePath: { type: 'string', description: 'Path to the source node' },
+          signalName: { type: 'string', description: 'Name of the signal' },
+          targetPath: { type: 'string', description: 'Path to the target node' },
+          method: { type: 'string', description: 'Method name on the target' },
+        },
+        required: ['nodePath', 'signalName', 'targetPath', 'method'],
+      },
+      handler: args => this.handleGameDisconnectSignal(args),
+    });
 
     // Define available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -1854,20 +1870,6 @@ Output: ${stdout}` }] };
           },
         },
         ...this.toolRegistry.definitions(),
-        {
-          name: 'game_disconnect_signal',
-          description: 'Disconnect a signal connection in the running game',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              nodePath: { type: 'string', description: 'Path to the source node' },
-              signalName: { type: 'string', description: 'Name of the signal' },
-              targetPath: { type: 'string', description: 'Path to the target node' },
-              method: { type: 'string', description: 'Method name on the target' },
-            },
-            required: ['nodePath', 'signalName', 'targetPath', 'method'],
-          },
-        },
         {
           name: 'game_emit_signal',
           description: 'Emit a signal on a node in the running game, optionally with arguments',
@@ -3721,8 +3723,6 @@ Output: ${stdout}` }] };
       return await this.handleGameWait(request.params.arguments);
     // Project management tools
     // New runtime signal/animation/group tools
-    case 'game_disconnect_signal':
-      return await this.handleGameDisconnectSignal(request.params.arguments);
     case 'game_emit_signal':
       return await this.handleGameEmitSignal(request.params.arguments);
     case 'game_play_animation':

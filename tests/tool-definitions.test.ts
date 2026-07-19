@@ -125,6 +125,7 @@ describe('Tool definitions', () => {
       'list_projects',
       'rename_file',
       'game_connect_signal',
+      'game_disconnect_signal',
     ]);
     for (const name of ALL_TOOL_NAMES) {
       if (!migratedTools.has(name)) expect(sourceCode).toContain(`case '${name}':`);
