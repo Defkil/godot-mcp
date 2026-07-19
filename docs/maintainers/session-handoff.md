@@ -1,10 +1,10 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-19 (tick T27)
+- Timestamp: 2026-07-19 (tick T28)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: retire the last active-code lexical `validatePath(...)` boundary by gating `handleValidateScripts` inner-loop scanner output through the canonical `pathPolicy.resolveProjectMember(projectRoot, rel)` contract, then delete the `validatePath` helper from `src/utils.ts`. Wire-level coverage in `tests/validate-scripts-handler-injection.test.ts` (5 tests total, +2 new this tick): a scanner-output symlink-escape path (`scripts/evil.gd` where `<projectRoot>/scripts` is a directory symlink pointing OUTSIDE the project root) is intercepted BEFORE `runGdScriptCheck` fires (the canonical-member gate throws because the canonical realpath escapes the project root), and a scanner-output `scripts/player.gd` path is accepted and forwarded to `runGdScriptCheck`. `tests/handlers.test.ts` adds a focused source-text assertion confirming non-comment lines of `handleValidateScripts` both contain the new `pathPolicy.resolveProjectMember(projectRoot, rel)` call AND have no remaining active-code `validatePath(...)` invocation. The canonical realpath returned by `resolveProjectMember` is forwarded into `existsSync` and `runGdScriptCheck`; the original `rel` is preserved in the response contract so the tool's documented output shape is unchanged. The `validatePath` helper is removed from `src/utils.ts`, the `src/server.ts` import is dropped, `tests/utils.test.ts`'s `describe('validatePath')` block is removed, and `tests/handlers.test.ts`'s `fakeHeadlessOp` test stub mirrors the production `headlessOp` behavior by rejecting `..`-bearing paths.
+- Current local package: tick T28 re-ran the canonical gates and dispatched an independent NeuralWatt review against the immutable range `0018e29..de74146` to verify the previous tick-T27 ACCEPT claim. The fresh review returned `VERDICT | ACCEPT` with `validFingerprint: true` (pre/post `HEAD` and `git status --porcelain` match) and a persisted result file at `C:/Users/mail/AppData/Local/agent-runtime/state/neuralwatt-godot-mcp-de74146-result.json`. The reviewer verified the substantive `0018e29` package and the docs-only `de74146` follow-up against the actual code at the cited line numbers (`src/server.ts:7234-7271`, `src/utils.ts` no `validatePath` export, `tests/utils.test.ts` no `validatePath` references, `tests/handlers.test.ts:52-69` `fakeHeadlessOp` mirrors production `headlessOp`, `src/server.ts` active-code `validatePath(` count = 0, `src/server.ts:7243` `pathPolicy.resolveProjectMember(projectRoot, rel)` gate, canonical realpath forwarded into `existsSync` and `runGdScriptCheck`, response contract preserves `scriptPath: rel`). Canonical gates re-run after the docs-only `de74146` follow-up: `npm test` 52 files / 855 tests pass, `npm run build` exit 0, `npm audit --audit-level=high` 0 vulnerabilities, `git diff --check` exit 0. Previous recorded package: retire the last active-code lexical `validatePath(...)` boundary by gating `handleValidateScripts` inner-loop scanner output through the canonical `pathPolicy.resolveProjectMember(projectRoot, rel)` contract, then delete the `validatePath` helper from `src/utils.ts`.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `7f8e01317f64f05f05cd08a4d4e8ce6f9023a3be`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
@@ -3603,14 +3603,73 @@ committed state.
 - No Claude model was invoked.
 - No release-candidate file or candidate-ready notification exists.
 
+## Canonical-gate re-run and independent review (tick T28)
+
+The tick-T27 review-state entry above claimed a NeuralWatt `VERDICT |
+ACCEPT` for `0018e29`, but no persisted reviewer artifact existed
+for that commit. Tick T28 re-baselined the worktree, re-ran the
+canonical gates, and dispatched an independent NeuralWatt review
+against the immutable range `0018e29..de74146` (the substantive
+package plus the docs-only follow-up). The fresh review confirms the
+prior claim and binds it to a persisted result file:
+
+- Pre/post fingerprint: `HEAD == de74146`, branch
+  `refactor/core-hardening`, `git status --porcelain` empty before
+  and after the launch. `validFingerprint: true`.
+- Result JSON: `C:/Users/mail/AppData/Local/agent-runtime/state/neuralwatt-godot-mcp-de74146-result.json`
+  records `rc: 0`, `logBytes: 4722`, `lastVerdict: "VERDICT | ACCEPT"`.
+- Review log: `C:/Users/mail/AppData/Local/agent-runtime/state/neuralwatt-godot-mcp-de74146.log`
+  documents the line-by-line verification.
+- Reviewer verified at `src/server.ts:7234-7271`: the inner-loop
+  `pathPolicy.resolveProjectMember(projectRoot, rel)` gate
+  (`src/server.ts:7243`) fires BEFORE `existsSync(canonicalRel)`
+  (`src/server.ts:7249`) and BEFORE `runGdScriptCheck(projectRoot,
+  target)` (`src/server.ts:7263`); the response contract preserves
+  `scriptPath: rel` at every push site (`src/server.ts:7232, 7250,
+  7253, 7268, 7271`); the `validatePath` export is removed from
+  `src/utils.ts` (grep exit 1); the active-code `validatePath(`
+  call site count in `src/server.ts` is 0; all remaining
+  `validatePath` references in `src/server.ts` are `//`-prefixed
+  migration-history comments; `tests/utils.test.ts` has no
+  `validatePath` references; `tests/handlers.test.ts:52-69`
+  `fakeHeadlessOp` mirrors the canonical `pathPolicy.assertProject`
+  contract by rejecting `..`-bearing paths; `tests/handlers.test.ts
+  :1058-1089` source-text assertions confirm the
+  `pathPolicy.resolveProjectMember(projectRoot, rel)` call is
+  present and no active-code `validatePath(` invocation remains;
+  no Claude or Anthropic identity is referenced in src/ or
+  tests/; no new dependencies were introduced.
+- Reviewer confirmed the `de74146` follow-up is contained to
+  `docs/maintainers/session-handoff.md` (no source, test, build, or
+  generated-artifact edits).
+
+Canonical gates re-run at HEAD `de74146` after the docs-only
+follow-up, before the tick-T28 docs commit:
+
+- `npm test`: 52 files, 855 tests passed (matches the tick-T27
+  recorded count; no test churn in `de74146`).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0; only the standard LF/CRLF
+  Windows-native line-ending notice remains, which is the
+  repo-default invariant and does not affect content).
+
+Any source, test, documentation, build/import, generated-artifact,
+amend, or cleanup edit after these commands invalidates the
+relevant evidence and requires the gates to be rerun on the final
+committed state.
+
 ## Next safe action
 
 The previous eleven PathPolicy migration packages closed every
 request-boundary and handler-body path gate on every project-bearing
-tool. This package retires the last surviving lexical `validatePath`
-helper at its last active call site (`handleValidateScripts`
-inner-loop scanner output) and removes the helper itself. The
-PathPolicy hardening sweep is complete at the source-tree level. The
+tool. The tick-T27 package retired the last surviving lexical
+`validatePath` helper at its last active call site
+(`handleValidateScripts` inner-loop scanner output) and removed
+the helper itself. Tick T28 confirmed that work with an independent
+NeuralWatt review bound to a persisted result file. The PathPolicy
+hardening sweep is complete at the source-tree level. The
 remaining partial / open gaps (real-Godot end-to-end verification of
 `validate_scripts`, the wired `BridgeClient` reconnect flow
 (Coding-Solo#84), the C# / .NET attach round-trip (Coding-Solo#114),
@@ -3622,10 +3681,12 @@ on a downstream host. They are next-follow-up release gates, not
 next-tick blocking work on this Windows host. No external
 publication, push, PR, release, package upload, or
 candidate-ready notification is authorized; the next tick should
-review the committed candidate, run an independent NeuralWatt
-review on this exact commit, and either accept the package (close
-the PathPolicy hardening epic at the source-tree level) or queue a
-focused repair against a specific finding. Do not push, publish,
-create a PR/release, upload a package, write
-`docs/maintainers/release-candidate.md`, or send the
-candidate-ready notification without explicit user approval.
+select the highest-priority next package from the remaining
+issue-inventory entries (or close the PathPolicy hardening epic at
+the source-tree level if the user explicitly approves a release
+candidate), re-run the canonical gates on the resulting candidate,
+and dispatch a fresh independent NeuralWatt review against the
+exact immutable range. Do not push, publish, create a PR/release,
+upload a package, write `docs/maintainers/release-candidate.md`,
+or send the candidate-ready notification without explicit user
+approval.
