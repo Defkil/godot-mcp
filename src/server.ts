@@ -1325,6 +1325,42 @@ Output: ${stdout}` }] };
       },
       handler: args => this.handleRenameFile(args),
     });
+    // `game_connect_signal` now derives schema, capability, and dispatch from
+    // the registry while preserving the existing handler contract (the
+    // `nodePath`, `signalName`, `targetPath`, `method` precondition that
+    // returns `nodePath, signalName, targetPath, and method are required.`
+    // on miss, the bridge `connect_signal` command, and the exact
+    // `JSON.stringify(response, null, 2)` envelope). The capability is `edit`
+    // so the existing `legacy-capabilities.ts` defense-in-depth entry remains
+    // consistent with the dispatch path.
+    this.toolRegistry.register({
+      name: 'game_connect_signal',
+      description: 'Connect a signal from one node to a method on another node in the running game',
+      capability: 'edit',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          nodePath: {
+            type: 'string',
+            description: 'Path to the source node that emits the signal',
+          },
+          signalName: {
+            type: 'string',
+            description: 'Name of the signal to connect',
+          },
+          targetPath: {
+            type: 'string',
+            description: 'Path to the target node that receives the signal',
+          },
+          method: {
+            type: 'string',
+            description: 'Method name to call on the target node',
+          },
+        },
+        required: ['nodePath', 'signalName', 'targetPath', 'method'],
+      },
+      handler: args => this.handleGameConnectSignal(args),
+    });
 
     // Define available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -1818,20 +1854,6 @@ Output: ${stdout}` }] };
           },
         },
         ...this.toolRegistry.definitions(),
-        {
-          name: 'game_connect_signal',
-          description: 'Connect a signal from one node to a method on another node in the running game',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              nodePath: { type: 'string', description: 'Path to the source node that emits the signal' },
-              signalName: { type: 'string', description: 'Name of the signal to connect' },
-              targetPath: { type: 'string', description: 'Path to the target node that receives the signal' },
-              method: { type: 'string', description: 'Method name to call on the target node' },
-            },
-            required: ['nodePath', 'signalName', 'targetPath', 'method'],
-          },
-        },
         {
           name: 'game_disconnect_signal',
           description: 'Disconnect a signal connection in the running game',
@@ -3699,8 +3721,6 @@ Output: ${stdout}` }] };
       return await this.handleGameWait(request.params.arguments);
     // Project management tools
     // New runtime signal/animation/group tools
-    case 'game_connect_signal':
-      return await this.handleGameConnectSignal(request.params.arguments);
     case 'game_disconnect_signal':
       return await this.handleGameDisconnectSignal(request.params.arguments);
     case 'game_emit_signal':

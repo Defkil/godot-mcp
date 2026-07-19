@@ -2024,10 +2024,10 @@ describe('Tool dispatch routing', () => {
     // `read_scene`, `modify_scene_node`, `remove_scene_node`,
     // `classdb_inspect`, `get_project_info`, `read_project_settings`,
     // `read_file`, `write_file`, `delete_file`, `create_directory`,
-    // `list_projects`, and `rename_file`. The previous count was 144; tick
-    // T36 (rename_file registry migration) reduces the legacy surface to
-    // 143.
-    expect(matches.length).toBe(143);
+    // `list_projects`, `rename_file`, and `game_connect_signal`. The
+    // previous count was 143; tick T37 (game_connect_signal registry
+    // migration) reduces the legacy surface to 142.
+    expect(matches.length).toBe(142);
   });
 
   it('does not let a legacy case fall through', () => {
