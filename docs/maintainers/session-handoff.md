@@ -1,13 +1,76 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-19 (tick T35)
+- Timestamp: 2026-07-19 (tick T36)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: tick T35 migrated `list_projects` to the typed tool registry with capability `inspect`, preserving the `directory` + `recursive` schema, the private handler body, the canonical PathPolicy `pathPolicy.allowsProject(directory)` gate, the `existsSync` precondition, the `findGodotProjects` recursive walk, and the exact `JSON.stringify(projects, null, 2)` success envelope. The legacy flat-list block and the `case 'list_projects':` switch arm are removed together. TDD evidence: focused RED failed (registry ownership missing + legacy case still present + duplicate flat-list block), then GREEN passed 8/8 in `tests/registry-migration-list-projects.test.ts`. The full canonical suite in `tests/handlers.test.ts`, `tests/schema-parity.test.ts`, `tests/tool-definitions.test.ts`, and the focused file-I/O / asset-import / script-resource injection suites now reflect the new count. Final gates: focused 8/8; full 903/903 (was 895 baseline + 8 new tests); build pass; audit zero; CRLF-aware diff-check pass. Nothing was pushed or published.
+- Current local package: tick T36 migrated `rename_file` to the typed tool registry with capability `edit`, preserving the exact legacy description, input schema, and `handleRenameFile` body (canonical-root `PathPolicy` gate on `args.projectPath`, `resolveProjectMember` on `filePath` and `newPath`, `project.godot` existence precondition, source-existence precondition, `mkdirSync` parent-directory guarantee, `renameSync` byte-exact move, and the exact `Renamed ${args.filePath} → ${args.newPath}` success envelope). The legacy flat-list block (Batch 4: Editor/Headless) and the `case 'rename_file':` switch arm are removed together. TDD evidence: focused RED failed (registry ownership missing + legacy case still present + duplicate flat-list block), then GREEN passed 8/8 in `tests/registry-migration-rename-file.test.ts`. The full canonical suite in `tests/handlers.test.ts`, `tests/schema-parity.test.ts`, `tests/tool-definitions.test.ts`, and the focused file-I/O / PathPolicy / capability-policy suites now reflect the new count. Final gates: focused 8/8; full 911/911 (was 903 baseline + 8 new tests); build pass; audit zero; CRLF-aware diff-check pass. Nothing was pushed or published.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `af988ca8a3b12877e3f7bac6de8978d582e06776` (tick T34 docs); the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
+
+## Current package — rename_file registry migration (tick T36)
+
+- Register `rename_file` with capability `edit`; remove only its legacy
+  flat-list block (Batch 4: Editor/Headless) and `case 'rename_file':`
+  switch arm; preserve the private `handleRenameFile` body, the canonical
+  `PathPolicy` `assertProject` gate on `projectPath`, the
+  `resolveProjectMember` gates on `filePath` and `newPath`, the
+  `project.godot` existence check, the source-existence precondition,
+  the `mkdirSync` parent-directory auto-creation, the `renameSync`
+  byte-exact move, and the exact
+  `Renamed ${args.filePath} → ${args.newPath}` success envelope.
+- Add eight wire-level tests in
+  `tests/registry-migration-rename-file.test.ts`: registry ownership +
+  capability, exact legacy schema, advertised uniqueness, real MCP
+  `tools/call` dispatch + byte-exact rename (source file disappears,
+  destination parent directory auto-created, file content preserved),
+  `filePath` outside the project root denied, `newPath` outside the
+  project root denied, `projectPath` outside the configured allowed
+  roots denied, legacy `case` removal, and flat-list block uniqueness
+  (exactly one `name: 'rename_file'` source occurrence, inside the
+  registry).
+- Update `tests/schema-parity.test.ts` (registered definition list,
+  capability map, advertised name uniqueness) and
+  `tests/tool-definitions.test.ts` (`migratedTools` set) to include
+  `rename_file`; update `tests/handlers.test.ts` "routes every
+  remaining legacy case to a handler" to assert 143 instead of 144.
+- Update `docs/maintainers/issue-inventory.md` `tugcantopaloglu#12`
+  row: 15 migrated tools, 158 advertised names, 143 legacy `case`
+  statements + 143 flat-list entries.
+- Verified before commit: focused 8/8, full 911/911 (was 903 baseline
+  + 8 new tests), build pass, audit zero, and
+  `git -c core.whitespace=cr-at-eol diff --check` pass. No real-Godot
+  claim: this bounded migration exercises registry dispatch +
+  PathPolicy through the real MCP `tools/list` and `tools/call`
+  boundary against a temporary Godot project under the OS temp
+  directory; it does not launch Godot.
+- Independent NeuralWatt review (`godot-mcp-review-tick-T36.md`,
+  model `glm-5.2-short`): **VERDICT | ACCEPT**. Pre/post fingerprint
+  unchanged at `d5833f9304bd0cb55f510e6efda988be3c6bef01`; reviewer
+  confirmed the registry registration, capability, exact legacy
+  schema, the unchanged `handleRenameFile` body (allowed-root
+  PathPolicy gate on `projectPath`, filePath + newPath `resolveProjectMember`
+  gates, `project.godot` precondition, source-existence precondition,
+  `mkdirSync` parent auto-creation, `renameSync` byte-exact move, exact
+  success envelope), the dispatcher routing registered tools through
+  `toolRegistry.dispatch` before the legacy switch, the 158-advertised-
+  name uniqueness, the 143-case legacy count, the six-file scope
+  (one source + one new test + three parity/count tests + one inventory),
+  no new dependencies, no Claude/Anthropic identity references. Four
+  non-blocking observations recorded: advertising-order relocation
+  (`rename_file` shifts from Batch 4 to the registry spread position,
+  consistent with T29-T35 pattern); defense-in-depth dead entry in
+  `legacy-capabilities.ts` (`rename_file: 'edit'` retained as
+  unreachable lookup since `toolRegistry.has` wins); textual drift in
+  `schema-parity.test.ts` opening `it` title ("advertises all 157
+  legacy contracts" while asserted total is 158; numeric assertion is
+  correct, prose is stale — to be addressed in a future docs-only
+  tightening commit); handoff not yet advanced to T36 (this commit
+  fixes that). Verdict saved at
+  `C:/Users/mail/AppData/Local/agent-runtime/state/neuralwatt-tick-T36-verdict.txt`.
+- No push, publication, PR, release, package upload, or
+  candidate-ready notification.
 
 ## Current package — list_projects registry migration (tick T35)
 

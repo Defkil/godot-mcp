@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 describe('MCP schema and dispatch parity', () => {
-  it('advertises all 157 legacy contracts plus the migrated/registered tools exactly once', async () => {
+  it('advertises all 143 legacy contracts plus the 15 migrated/registered tools for exactly 158 unique names', async () => {
     const server = new GodotServer({ registerSignalHandlers: false });
     const response = await requestHandler(server, 'tools/list')(
       { method: 'tools/list', params: {} },
