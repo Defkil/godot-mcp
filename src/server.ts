@@ -1115,6 +1115,33 @@ Output: ${stdout}` }] };
       handler: args => this.handleClassdbInspect(args),
     });
 
+    // `get_project_info` is the next incremental legacy handler migrated
+    // to the tool registry. The handler body (handleGetProjectInfo) is
+    // preserved verbatim: it still applies `pathPolicy.assertProject` to
+    // `args.projectPath` before any filesystem reach and emits the same
+    // JSON metadata envelope. Migrating it removes one `case` line from
+    // the legacy switch and decreases the legacy-count assertions in
+    // `tests/tool-definitions.test.ts` and `tests/handlers.test.ts`. The
+    // `capabilityForLegacyTool` entry for `get_project_info` is retained
+    // as redundant defense-in-depth: the registry `has` check now wins,
+    // so the legacy lookup is unreachable for the migrated tool.
+    this.toolRegistry.register({
+      name: 'get_project_info',
+      description: 'Retrieve metadata about a Godot project',
+      capability: 'inspect',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Godot project path',
+          },
+        },
+        required: ['projectPath'],
+      },
+      handler: args => this.handleGetProjectInfo(args),
+    });
+
     // Define available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
@@ -1180,20 +1207,6 @@ Output: ${stdout}` }] };
               },
             },
             required: ['directory'],
-          },
-        },
-        {
-          name: 'get_project_info',
-          description: 'Retrieve metadata about a Godot project',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Godot project path',
-              },
-            },
-            required: ['projectPath'],
           },
         },
         {
@@ -3548,8 +3561,6 @@ Output: ${stdout}` }] };
       return await this.handleGetGodotVersion();
     case 'list_projects':
       return await this.handleListProjects(request.params.arguments);
-    case 'get_project_info':
-      return await this.handleGetProjectInfo(request.params.arguments);
     case 'create_scene':
       return await this.handleCreateScene(request.params.arguments);
     case 'add_node':

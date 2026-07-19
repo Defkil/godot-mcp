@@ -1,10 +1,10 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-19 (tick T28)
+- Timestamp: 2026-07-19 (tick T29)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: tick T28 re-ran the canonical gates and dispatched an independent NeuralWatt review against the immutable range `0018e29..de74146` to verify the previous tick-T27 ACCEPT claim. The fresh review returned `VERDICT | ACCEPT` with `validFingerprint: true` (pre/post `HEAD` and `git status --porcelain` match) and a persisted result file at `C:/Users/mail/AppData/Local/agent-runtime/state/neuralwatt-godot-mcp-de74146-result.json`. The reviewer verified the substantive `0018e29` package and the docs-only `de74146` follow-up against the actual code at the cited line numbers (`src/server.ts:7234-7271`, `src/utils.ts` no `validatePath` export, `tests/utils.test.ts` no `validatePath` references, `tests/handlers.test.ts:52-69` `fakeHeadlessOp` mirrors production `headlessOp`, `src/server.ts` active-code `validatePath(` count = 0, `src/server.ts:7243` `pathPolicy.resolveProjectMember(projectRoot, rel)` gate, canonical realpath forwarded into `existsSync` and `runGdScriptCheck`, response contract preserves `scriptPath: rel`). Canonical gates re-run after the docs-only `de74146` follow-up: `npm test` 52 files / 855 tests pass, `npm run build` exit 0, `npm audit --audit-level=high` 0 vulnerabilities, `git diff --check` exit 0. Previous recorded package: retire the last active-code lexical `validatePath(...)` boundary by gating `handleValidateScripts` inner-loop scanner output through the canonical `pathPolicy.resolveProjectMember(projectRoot, rel)` contract, then delete the `validatePath` helper from `src/utils.ts`.
+- Current local package: tick T29 migrated the next legacy handler, `get_project_info`, to the typed tool registry. The package is a small, bounded incremental step that closes one legacy `case` statement and the matching flat-list block entry while preserving every contract of the existing handler body (PathPolicy `assertProject` on `args.projectPath`, `project.godot` existence check, `getProjectStructureAsync` walker, `isDotnetProject` flag, `execFileAsync(godotPath, ['--version'])` Godot-version probe, and the same JSON response envelope). Canonical gates re-run after the package: `npm test` 53 files / 860 tests pass (was 52 / 855; +1 file, +5 tests), `npm run build` exit 0, `npm audit --audit-level=high` 0 vulnerabilities, `git diff --check` exit 0. The previously-claimed tick-T28 NeuralWatt `VERDICT | ACCEPT` review of `0018e29..de74146` is unchanged; no fresh NeuralWatt dispatch is required for a focused single-handler dispatcher refactor. Previous recorded package: retire the last active-code lexical `validatePath(...)` boundary by gating `handleValidateScripts` inner-loop scanner output through the canonical `pathPolicy.resolveProjectMember(projectRoot, rel)` contract, then delete the `validatePath` helper from `src/utils.ts`.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `7f8e01317f64f05f05cd08a4d4e8ce6f9023a3be`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
@@ -181,6 +181,158 @@ flow (Coding-Solo#84), the C# / .NET attach round-trip
 (Coding-Solo#103), and the `update_project_uids` round-trip
 (Coding-Solo#102) remain the next-follow-up release gates for a
 Godot-equipped host.
+
+## Current package — get_project_info registry migration (sibling of tugcantopaloglu#12)
+
+The previous seven PathPolicy migration packages closed the
+request-boundary `assertSafeToolPaths` guard and the handler-body
+`pathPolicy.assertProject` + `pathPolicy.resolveProjectMember` gate
+on every project-bearing tool, and migrated seven legacy handlers
+(`modify_project_settings`, `list_project_files`, `launch_editor`,
+`read_scene`, `modify_scene_node`, `remove_scene_node`,
+`classdb_inspect`) to the typed tool registry. The cross-fork issue
+inventory records one remaining `partial` for [tugcantopaloglu#12]
+("Complete migration must remove the remaining legacy source-text
+switch assertions") that does not require a Godot binary. The lowest-
+risk incremental step is to migrate the next read-only, single-arg
+handler — `get_project_info` — which has no GDScript spawn on the
+hot path that the runner cannot stub. This package migrates that
+one handler to the registry and removes its `case` statement and
+flat-list block entry; the existing private `handleGetProjectInfo`
+body is preserved verbatim (PathPolicy `assertProject` on
+`args.projectPath`, `project.godot` existence check,
+`getProjectStructureAsync` walker, `isDotnetProject` flag,
+`execFileAsync(godotPath, ['--version'])` Godot-version probe, and
+the same JSON metadata envelope). The package has four coherent
+changes:
+
+1. **`src/server.ts`** — focused migration of `get_project_info` to
+   the tool registry, matching the seven previously-migrated
+   handlers exactly. The migration adds one `toolRegistry.register`
+   block right after the `classdb_inspect` registration, removes
+   one `case 'get_project_info':` line from the legacy switch at
+   `src/server.ts:3551` (now line 3561 after the new comment
+   block), and removes the matching flat-list block entry from
+   `ListToolsRequestSchema` so the total unique advertised tool
+   count stays at 158. The legacy `capabilityForLegacyTool` entry
+   for `get_project_info` is retained as redundant
+   defense-in-depth (the registry `has` check now wins, so the
+   legacy lookup is unreachable for the migrated tool). The diff
+   is 25 insertions, 18 deletions across `setupToolHandlers()` and
+   the legacy switch. The diff adds no new helper modules, no
+   schema changes, no handler signature changes, no capability
+   policy changes, no BridgeClient changes, no `validatePath`
+   lexical helper changes, no changes to `headlessOp`, and no
+   changes to any other handler.
+
+2. **`tests/registry-migration-get-project-info.test.ts`** (new, 5
+   tests) — exercises the real `GodotServer` + `PathPolicy` +
+   the private `handleGetProjectInfo` method through the real
+   MCP `tools/call` boundary, the same wiring pattern as
+   `tests/classdb-inspect.test.ts`. Each test uses a temporary
+   Godot project under the OS temp directory, removed in
+   `afterEach`. The 5 tests cover:
+   - **`get_project_info`** is registered in the in-memory tool
+     registry with the `inspect` capability, asserted via
+     `toolRegistry.has('get_project_info')` and
+     `toolRegistry.capabilityFor('get_project_info') === 'inspect'`.
+   - **`get_project_info`** advertises a snake_case schema in the
+     real MCP `tools/list` with the same `projectPath`-only
+     contract (matches the sibling `classdb_inspect` schema-
+     parity test pattern).
+   - **`get_project_info`** routes `tools/call` through the
+     registry dispatch: the test stubs the private
+     `handleGetProjectInfo` with a spy that returns a
+     deterministic success envelope, asserts the spy was called
+     exactly once with `args.projectPath`, and asserts the
+     response body names the project. This proves the registry
+     dispatch wiring fires the real handler without depending
+     on a real Godot binary.
+   - **`get_project_info`** surfaces a `projectPath`-outside-
+     configured-allowed-roots error through the registry
+     dispatch path. The PathPolicy gate fires BEFORE any
+     filesystem reach (no `project.godot` probe, no Godot
+     spawn, no `getProjectStructureAsync` walker).
+   - The source-text assertion confirms no active-code
+     `case 'get_project_info':` line remains in `src/server.ts`.
+
+3. **`tests/tool-definitions.test.ts`** — adds `'classdb_inspect'`
+   and `'get_project_info'` to the `migratedTools` Set so the
+   legacy-switch assertion stays correct.
+
+4. **`tests/schema-parity.test.ts`** — adds `'get_project_info'`
+   to the expected `toolRegistry.definitions()` list, adds a
+   uniqueness filter assertion
+   `expect(names.filter((name: string) => name === 'get_project_info')).toHaveLength(1)`,
+   and adds
+   `expect((server as any).toolRegistry.capabilityFor('get_project_info')).toBe('inspect')`.
+   Updates the comment on line 30-32 to enumerate all eight
+   migrated tools.
+
+5. **`tests/handlers.test.ts`** — decrements the expected legacy
+   `case`-statement count from 151 to 150 in the `routes every
+   remaining legacy case to a handler` test. The new comment
+   names all five migrated tools that now resolve through the
+   registry dispatch path.
+
+6. **`docs/maintainers/issue-inventory.md`** — updates the
+   [tugcantopaloglu#12] row to enumerate the eight migrated
+   tools and the new 150-legacy-`case` count.
+
+The package:
+
+- preserves all 158 legacy tool contracts, every schema, every
+  handler, the 5 closed-list profiles, the package identity, the
+  path policy, the runtime bridge, and the MIT attribution;
+- does **not** touch `src/scripts/godot_operations.gd`,
+  `src/scripts/mcp_interaction_server.gd`, the capability
+  policy, the request limiter, the operation runner, the
+  BridgeClient, the upstream `bridge-installer.ts`, the sibling
+  `manage_*` gates, `core_file_io`, the `headlessOp` lexical
+  boundary, or any other handler;
+- the only documented contract change is the dispatch path: the
+  legacy `case 'get_project_info':` line and the flat-list
+  `get_project_info` block are removed and the same tool is
+  reached through the registry dispatch (the existing
+  `setupToolHandlers()` registration that the seven prior
+  migrations already use);
+- does not push, publish, create a PR/release, upload a
+  package, write `docs/maintainers/release-candidate.md`, or
+  send the candidate-ready notification.
+
+Source evidence:
+
+- `src/server.ts` is the only modified source file.
+- `tests/registry-migration-get-project-info.test.ts` is the
+  only new test file.
+- `tests/tool-definitions.test.ts`, `tests/schema-parity.test.ts`,
+  `tests/handlers.test.ts` are the three test fixtures
+  updated.
+- `docs/maintainers/issue-inventory.md` is the only docs file
+  updated.
+
+## Verification on the package filesystem
+
+- `npx vitest run tests/registry-migration-get-project-info.test.ts`:
+  1 file, 5 tests passed (RED 3/5 confirmed before the migration;
+  GREEN 5/5 after).
+- `npx vitest run tests/registry-migration-get-project-info.test.ts
+  tests/schema-parity.test.ts tests/tool-definitions.test.ts
+  tests/handlers.test.ts tests/classdb-inspect.test.ts`: 5 files,
+  410 tests passed (focused regression set green).
+- `npm test`: 53 files, 860 tests passed (was 52 / 855 before
+  this package; +1 file, +5 tests).
+- `npm run build`: passed; TypeScript compiled, scripts copied
+  to `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (only the standard LF/CRLF
+  warning for the modified source file, which the sibling
+  packages on this branch also emit).
+
+Any source, test, documentation, build/import, generated-artifact,
+amend, or cleanup edit after these commands invalidates the
+relevant evidence and requires the gates to be rerun on the final
+committed state.
 
 ## Current package — gate shared headlessOp with canonical PathPolicy contract
 
@@ -1103,14 +1255,25 @@ section above) closed three of those four. The remaining list is:
   internal-relative paths (deferred because those paths are
   produced by trusted internal scanners, not user input).
 
-Each remaining handler can be ported one at a time with a focused
-wire-level test mirroring
-`tests/manage-autoloads-input-map-export-presets-handler-injection.test.ts`
-or
-`tests/create-project-handler-injection.test.ts`. Do not push,
+The tick T29 `get_project_info` registry migration reduces the
+legacy `case`-statement count from 151 to 150 and the flat-list
+entry count from 151 to 150. Eight handlers are now registered
+through `toolRegistry`. The next safe step is to continue this
+incremental migration with the next read-only, single-arg legacy
+handler that has no GDScript-spawn-on-the-hot-path coupling that
+the runner cannot stub — for example `get_godot_version` (no
+args), `list_projects` (single `directory` arg, already has
+`pathPolicy.allowsProject`), or `get_debug_output` (no args).
+Each migration follows the same pattern: add one
+`toolRegistry.register` block, remove the matching `case` and
+flat-list block entries, decrement the legacy-count assertions
+in `tests/tool-definitions.test.ts` / `tests/handlers.test.ts`
+/ `tests/schema-parity.test.ts`, and add a focused wire-level
+test mirroring
+`tests/registry-migration-get-project-info.test.ts`. Do not push,
 publish, create a PR/release, upload a package, write
-`docs/maintainers/release-candidate.md`, or send the candidate-ready
-notification.
+`docs/maintainers/release-candidate.md`, or send the
+candidate-ready notification.
 
 
 

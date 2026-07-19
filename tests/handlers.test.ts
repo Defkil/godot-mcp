@@ -2007,11 +2007,12 @@ describe('Tool dispatch routing', () => {
   it('routes every remaining legacy case to a handler', () => {
     const caseRegex = /case '(\w+)':\s*\n\s*return await this\.handle/g;
     const matches = [...sourceCode.matchAll(caseRegex)];
-    // Subtract the three headless scene tools migrated to the tool registry
-    // (`read_scene`, `modify_scene_node`, `remove_scene_node`) which now
-    // resolve through the registry dispatch path and no longer appear as
-    // legacy `case` statements. The previous count was 154.
-    expect(matches.length).toBe(151);
+    // Subtract the migrated tools that now resolve through the registry
+    // dispatch path and no longer appear as legacy `case` statements:
+    // `read_scene`, `modify_scene_node`, `remove_scene_node`,
+    // `classdb_inspect`, and `get_project_info`. The previous count was
+    // 154; this package reduces the legacy surface to 150.
+    expect(matches.length).toBe(150);
   });
 
   it('does not let a legacy case fall through', () => {
