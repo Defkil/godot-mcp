@@ -6,7 +6,7 @@
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
 - Current local package: tick T35 migrated `list_projects` to the typed tool registry with capability `inspect`, preserving the `directory` + `recursive` schema, the private handler body, the canonical PathPolicy `pathPolicy.allowsProject(directory)` gate, the `existsSync` precondition, the `findGodotProjects` recursive walk, and the exact `JSON.stringify(projects, null, 2)` success envelope. The legacy flat-list block and the `case 'list_projects':` switch arm are removed together. TDD evidence: focused RED failed (registry ownership missing + legacy case still present + duplicate flat-list block), then GREEN passed 8/8 in `tests/registry-migration-list-projects.test.ts`. The full canonical suite in `tests/handlers.test.ts`, `tests/schema-parity.test.ts`, `tests/tool-definitions.test.ts`, and the focused file-I/O / asset-import / script-resource injection suites now reflect the new count. Final gates: focused 8/8; full 903/903 (was 895 baseline + 8 new tests); build pass; audit zero; CRLF-aware diff-check pass. Nothing was pushed or published.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
-- Previous reviewed documentation commit: `7503383ace0ad0fb28d47915deff1b0b024197e8` (tick T33 docs); the final handoff commit is a separate descendant and did not amend it.
+- Previous reviewed documentation commit: `af988ca8a3b12877e3f7bac6de8978d582e06776` (tick T34 docs); the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
 
 ## Current package — list_projects registry migration (tick T35)
@@ -41,10 +41,21 @@
   PathPolicy through the real MCP `tools/list` and `tools/call`
   boundary against a temporary parent directory under the OS temp
   directory; it does not launch Godot.
-- No independent reviewer verdict yet for tick T35; this commit only
-  records the implementation + focused/full gate evidence and the
-  matching handoff update. The next tick will route a focused
-  NeuralWatt review of the T35 candidate commit.
+- Independent NeuralWatt review (`godot-mcp-review-tick-T35.md`,
+  model `glm-5.2-short`): **VERDICT | ACCEPT**. Pre/post fingerprint
+  unchanged at `21291fa814532291e04c1e1c45369b9fcd86a89f`; reviewer
+  confirmed the registry registration, capability, exact schema,
+  dispatch path, the `pathPolicy.allowsProject(directory)` gate firing
+  before any filesystem walk, the 158-advertised-name uniqueness, the
+  144-case legacy count, the seven-file scope, no new dependencies, no
+  Claude/Anthropic identity references. Three non-blocking observations
+  recorded: prompt-side candidate-hash label mismatch (the reviewer
+  correctly reviewed the actual tip `21291fa814…`); the `handlers.test.ts`
+  migrated-tool comment lists 11 of 14 migrated tools (numeric
+  assertion `144` is correct); `list_projects` shifts from its legacy
+  flat-list slot to the registry spread position (consistent with the
+  T29-T34 pattern). Verdict saved at
+  `C:/Users/mail/AppData/Local/agent-runtime/state/neuralwatt-tick-T35-verdict.txt`.
 - No push, publication, PR, release, package upload, or
   candidate-ready notification.
 
