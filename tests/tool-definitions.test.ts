@@ -121,6 +121,7 @@ describe('Tool definitions', () => {
       'read_file',
       'write_file',
       'delete_file',
+      'create_directory',
     ]);
     for (const name of ALL_TOOL_NAMES) {
       if (!migratedTools.has(name)) expect(sourceCode).toContain(`case '${name}':`);

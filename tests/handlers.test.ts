@@ -1048,8 +1048,14 @@ describe('Handler source structure', () => {
     // (they reference the migration history for future maintainers);
     // the assertions below only inspect non-comment lines so the
     // comment trail does not falsely satisfy either condition.
+    //
+    // Tick T34 repair: split a CRLF source blob on `\n` leaves a
+    // trailing `\r` on every line. The dot in `/\/\/.*$/` does not
+    // consume the carriage return, so the historical comment trail
+    // was treated as active code on Windows. Normalize CRLF first.
     const activeLines = body
       .split('\n')
+      .map(line => line.replace(/\r$/, ''))
       .map(line => line.replace(/\/\/.*$/, ''));
     expect(activeLines.some(line => line.includes('pathPolicy.resolveProjectMember(projectPath, args.scene)'))).toBe(true);
     expect(activeLines.some(line => /validatePath\(/.test(line))).toBe(false);
@@ -1065,6 +1071,11 @@ describe('Handler source structure', () => {
     // `runGdScriptCheck`. This source-text assertion proves the inner
     // loop adopted the canonical contract and removed the lexical
     // call.
+    //
+    // Tick T34 repair: splitting a CRLF source blob on newline leaves
+    // a trailing carriage return on every line. The prior stripping
+    // failed to consume it and the historical comment was treated as
+    // active code. Normalize CRLF first, then strip `//` comments.
     const startMarker = 'private async handleValidateScripts(args: any) {';
     const startIndex = sourceCode.indexOf(startMarker);
     expect(startIndex, 'handleValidateScripts must be present in source').toBeGreaterThanOrEqual(0);
@@ -1080,10 +1091,11 @@ describe('Handler source structure', () => {
     // The lexical `validatePath(` invocation must NOT remain as an
     // active code path in `handleValidateScripts`. Comments that
     // document the historical boundary are intentionally preserved;
-    // the assertion below only inspects non-comment lines so the
-    // comment trail does not falsely satisfy the condition.
+    // the assertion below normalizes CRLF before stripping comments so
+    // the comment trail does not falsely satisfy the condition.
     const activeLines = body
       .split('\n')
+      .map(line => line.replace(/\r$/, ''))
       .map(line => line.replace(/\/\/.*$/, ''));
     expect(activeLines.some(line => line.includes('pathPolicy.resolveProjectMember(projectRoot, rel)'))).toBe(true);
     expect(activeLines.some(line => /validatePath\(/.test(line))).toBe(false);
@@ -2011,10 +2023,10 @@ describe('Tool dispatch routing', () => {
     // dispatch path and no longer appear as legacy `case` statements:
     // `read_scene`, `modify_scene_node`, `remove_scene_node`,
     // `classdb_inspect`, `get_project_info`, `read_project_settings`,
-    // `read_file`, `write_file`, and `delete_file`. The previous count
-    // was 147; tick T33 (delete_file registry migration) reduces the
-    // legacy surface to 146.
-    expect(matches.length).toBe(146);
+    // `read_file`, `write_file`, `delete_file`, and `create_directory`.
+    // The previous count was 146; tick T34 (create_directory registry
+    // migration) reduces the legacy surface to 145.
+    expect(matches.length).toBe(145);
   });
 
   it('does not let a legacy case fall through', () => {

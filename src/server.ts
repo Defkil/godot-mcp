@@ -1252,6 +1252,28 @@ Output: ${stdout}` }] };
       },
       handler: args => this.handleDeleteFile(args),
     });
+    // `create_directory` now derives schema, capability, and dispatch from the
+    // registry while preserving the existing handler contract.
+    this.toolRegistry.register({
+      name: 'create_directory',
+      description: 'Create a directory inside a Godot project',
+      capability: 'edit',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Godot project path',
+          },
+          directoryPath: {
+            type: 'string',
+            description: 'Directory path relative to project root',
+          },
+        },
+        required: ['projectPath', 'directoryPath'],
+      },
+      handler: args => this.handleCreateDirectory(args),
+    });
 
     // Define available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -1898,18 +1920,6 @@ Output: ${stdout}` }] };
           },
         },
         // File I/O tools (migrated definitions are supplied by toolRegistry)
-        {
-          name: 'create_directory',
-          description: 'Create a directory inside a Godot project',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: { type: 'string', description: 'Godot project path' },
-              directoryPath: { type: 'string', description: 'Directory path relative to project root' },
-            },
-            required: ['projectPath', 'directoryPath'],
-          },
-        },
         // Error/Log capture tools
         {
           name: 'game_get_errors',
@@ -3692,9 +3702,8 @@ Output: ${stdout}` }] };
       return await this.handleAttachScript(request.params.arguments);
     case 'create_resource':
       return await this.handleCreateResource(request.params.arguments);
-    // File I/O tools (read_file, write_file, and delete_file use the registry path)
-    case 'create_directory':
-      return await this.handleCreateDirectory(request.params.arguments);
+    // File I/O tools use the registry path; the legacy switch is intentionally
+    // kept narrow so the gated handlers are not duplicated here.
     // Error/Log capture tools
     case 'game_get_errors':
       return await this.handleGameGetErrors();
