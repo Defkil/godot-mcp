@@ -1,13 +1,63 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-19 (tick T36)
+- Timestamp: 2026-07-19 (tick T37)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: tick T36 migrated `rename_file` to the typed tool registry with capability `edit`, preserving the exact legacy description, input schema, and `handleRenameFile` body (canonical-root `PathPolicy` gate on `args.projectPath`, `resolveProjectMember` on `filePath` and `newPath`, `project.godot` existence precondition, source-existence precondition, `mkdirSync` parent-directory guarantee, `renameSync` byte-exact move, and the exact `Renamed ${args.filePath} → ${args.newPath}` success envelope). The legacy flat-list block (Batch 4: Editor/Headless) and the `case 'rename_file':` switch arm are removed together. TDD evidence: focused RED failed (registry ownership missing + legacy case still present + duplicate flat-list block), then GREEN passed 8/8 in `tests/registry-migration-rename-file.test.ts`. The full canonical suite in `tests/handlers.test.ts`, `tests/schema-parity.test.ts`, `tests/tool-definitions.test.ts`, and the focused file-I/O / PathPolicy / capability-policy suites now reflect the new count. Final gates: focused 8/8; full 911/911 (was 903 baseline + 8 new tests); build pass; audit zero; CRLF-aware diff-check pass. Nothing was pushed or published.
+- Current local package: tick T37 migrated `game_connect_signal` to the typed tool registry with capability `edit`, preserving the exact legacy description, input schema, and `handleGameConnectSignal` body (the `nodePath`/`signalName`/`targetPath`/`method` precondition that returns `nodePath, signalName, targetPath, and method are required.` on miss, the bridge `connect_signal` command and the `JSON.stringify(response, null, 2)` envelope). The legacy flat-list block (Batch 1: Signals) and the `case 'game_connect_signal':` switch arm are removed together. TDD evidence: focused RED failed (registry ownership missing + legacy case still present + duplicate flat-list block), then GREEN passed 6/6 in `tests/registry-migration-game-connect-signal.test.ts`. The full canonical suite in `tests/handlers.test.ts`, `tests/schema-parity.test.ts`, `tests/tool-definitions.test.ts`, and the focused file-I/O / PathPolicy / capability-policy suites now reflect the new count. Final gates: focused 6/6; full 917/917 (was 911 baseline + 6 new tests); build pass; audit zero; CRLF-aware diff-check pass. Nothing was pushed or published.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `af988ca8a3b12877e3f7bac6de8978d582e06776` (tick T34 docs); the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
+
+## Current package — game_connect_signal registry migration (tick T37)
+
+- Register `game_connect_signal` with capability `edit`; remove only its
+  legacy flat-list block (Batch 1: Signals) and
+  `case 'game_connect_signal':` switch arm; preserve the private
+  `handleGameConnectSignal` body, the exact
+  `nodePath, signalName, targetPath, and method are required.` precondition,
+  the bridge `connect_signal` command, and the exact
+  `JSON.stringify(response, null, 2)` envelope.
+- Add six wire-level tests in
+  `tests/registry-migration-game-connect-signal.test.ts`: registry
+  ownership + capability, exact legacy schema, advertised uniqueness, real
+  MCP `tools/call` dispatch + typed bridge envelope (the runtime gate is
+  satisfied with a stubbed `activeProcess` + connected bridge client so
+  the test stays scoped to the registry/PathPolicy contract without
+  spawning Godot), `nodePath`/`signalName`/`targetPath`/`method` missing
+  precondition returning the exact error envelope, legacy `case` removal,
+  and flat-list block uniqueness (exactly one
+  `name: 'game_connect_signal'` source occurrence, inside the registry).
+- Update `tests/schema-parity.test.ts` (registered definition list,
+  capability map, advertised name uniqueness) and
+  `tests/tool-definitions.test.ts` (`migratedTools` set) to include
+  `game_connect_signal`; update `tests/handlers.test.ts` "routes every
+  remaining legacy case to a handler" to assert 142 instead of 143.
+- Update `docs/maintainers/issue-inventory.md` `tugcantopaloglu#12`
+  row: 16 migrated tools, 158 advertised names, 142 legacy `case`
+  statements + 142 flat-list entries.
+- Verified before commit: focused 6/6, full 917/917 (was 911 baseline
+  + 6 new tests), build pass, audit zero, and
+  `git -c core.whitespace=cr-at-eol diff --check` pass. No real-Godot
+  claim: this bounded migration exercises registry dispatch through the
+  real MCP `tools/list` and `tools/call` boundary against a stubbed
+  `gameConnection.bridgeClient`; it does not launch Godot.
+- Independent NeuralWatt review (`godot-mcp-review-tick-T37.md`,
+  model `glm-5.2-short`): **VERDICT | ACCEPT**. Pre/post fingerprint
+  unchanged at `aee928d35faa9b8372f3bb2440e87c03c23505e9`; reviewer
+  confirmed the registry registration, capability (`edit`), exact legacy
+  schema, dispatch path, the `nodePath`/`signalName`/`targetPath`/`method`
+  precondition returning the exact
+  `nodePath, signalName, targetPath, and method are required.` error
+  envelope, the runtime gate satisfied with a stubbed `activeProcess` +
+  connected `bridgeClient` (no Godot spawn), the bridge `connect_signal`
+  command + `JSON.stringify(response, null, 2)` envelope, the
+  158-advertised-name uniqueness, the 142-case legacy count, the
+  six-file scope, no new dependencies, no Claude/Anthropic identity
+  references. Zero findings. Verdict saved at
+  `C:/Users/mail/AppData/Local/agent-runtime/state/neuralwatt-tick-T37-verdict.txt`.
+- No push, publication, PR, release, package upload, or
+  candidate-ready notification.
 
 ## Current package — rename_file registry migration (tick T36)
 
