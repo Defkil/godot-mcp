@@ -1178,6 +1178,32 @@ Output: ${stdout}` }] };
       },
       handler: args => this.handleReadProjectSettings(args),
     });
+    // `read_file` is a read-only inspection tool that resolves its
+    // project root and member path through the canonical `PathPolicy`
+    // (`assertProject` + `resolveProjectMember`), exactly like the sibling
+    // file-I/O handlers; the registered capability is `inspect` and the
+    // legacy flat-list block + legacy switch arm are removed alongside
+    // the existing tool definitions.
+    this.toolRegistry.register({
+      name: 'read_file',
+      description: 'Read a text file from a Godot project',
+      capability: 'inspect',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Godot project path',
+          },
+          filePath: {
+            type: 'string',
+            description: 'File path relative to project root',
+          },
+        },
+        required: ['projectPath', 'filePath'],
+      },
+      handler: args => this.handleReadFile(args),
+    });
 
     // Define available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -1825,18 +1851,6 @@ Output: ${stdout}` }] };
           },
         },
         // File I/O tools
-        {
-          name: 'read_file',
-          description: 'Read a text file from a Godot project',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: { type: 'string', description: 'Godot project path' },
-              filePath: { type: 'string', description: 'File path relative to project root' },
-            },
-            required: ['projectPath', 'filePath'],
-          },
-        },
         {
           name: 'write_file',
           description: 'Create or overwrite a text file in a Godot project',
@@ -3657,8 +3671,6 @@ Output: ${stdout}` }] };
     case 'create_resource':
       return await this.handleCreateResource(request.params.arguments);
     // File I/O tools
-    case 'read_file':
-      return await this.handleReadFile(request.params.arguments);
     case 'write_file':
       return await this.handleWriteFile(request.params.arguments);
     case 'delete_file':
