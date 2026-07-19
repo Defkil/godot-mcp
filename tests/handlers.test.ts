@@ -2011,7 +2011,7 @@ describe('Tool dispatch routing', () => {
     // dispatch path and no longer appear as legacy `case` statements:
     // `read_scene`, `modify_scene_node`, `remove_scene_node`,
     // `classdb_inspect`, and `get_project_info`. The previous count was
-    // 154; this package reduces the legacy surface to 150.
+    // 151; this package reduces the legacy surface to 150.
     expect(matches.length).toBe(150);
   });
 
