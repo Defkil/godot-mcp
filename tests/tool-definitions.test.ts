@@ -123,6 +123,7 @@ describe('Tool definitions', () => {
       'delete_file',
       'create_directory',
       'list_projects',
+      'rename_file',
     ]);
     for (const name of ALL_TOOL_NAMES) {
       if (!migratedTools.has(name)) expect(sourceCode).toContain(`case '${name}':`);

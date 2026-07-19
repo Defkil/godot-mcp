@@ -1297,6 +1297,34 @@ Output: ${stdout}` }] };
       },
       handler: args => this.handleListProjects(args),
     });
+    // `rename_file` now derives schema, capability, and dispatch from the
+    // registry while preserving the existing handler contract (canonical-root
+    // PathPolicy gate, file move with auto-mkdirSync of the destination
+    // directory, exact `Renamed ${filePath} → ${newPath}` response envelope).
+    this.toolRegistry.register({
+      name: 'rename_file',
+      description: 'Rename or move a file within the project',
+      capability: 'edit',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Godot project path',
+          },
+          filePath: {
+            type: 'string',
+            description: 'Current file path (relative to project)',
+          },
+          newPath: {
+            type: 'string',
+            description: 'New file path (relative to project)',
+          },
+        },
+        required: ['projectPath', 'filePath', 'newPath'],
+      },
+      handler: args => this.handleRenameFile(args),
+    });
 
     // Define available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -3113,19 +3141,6 @@ Output: ${stdout}` }] };
         },
         // Batch 4: Editor/Headless + Localization + Resource
         {
-          name: 'rename_file',
-          description: 'Rename or move a file within the project',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: { type: 'string', description: 'Godot project path' },
-              filePath: { type: 'string', description: 'Current file path (relative to project)' },
-              newPath: { type: 'string', description: 'New file path (relative to project)' },
-            },
-            required: ['projectPath', 'filePath', 'newPath'],
-          },
-        },
-        {
           name: 'manage_resource',
           description: 'Read or modify .tres/.res resource files',
           inputSchema: {
@@ -3871,8 +3886,6 @@ Output: ${stdout}` }] };
     case 'game_audio_spatial':
       return await this.handleGameAudioSpatial(request.params.arguments);
     // Batch 4: Editor/Headless + Localization + Resource
-    case 'rename_file':
-      return await this.handleRenameFile(request.params.arguments);
     case 'manage_resource':
       return await this.handleManageResource(request.params.arguments);
     case 'validate_script':
