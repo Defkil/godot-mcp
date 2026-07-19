@@ -6,7 +6,7 @@
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
 - Current local package: tick T38 migrates `game_disconnect_signal` to the typed tool registry with capability `edit`, preserving the exact legacy description, schema, private handler, missing-argument wording, `disconnect_signal` bridge mapping, snake_case parameters, and JSON success envelope. The focused RED failed 2/6 because registry ownership was absent and the legacy switch case remained; the minimal production change then passed focused GREEN 6/6. Final canonical gates are recorded in the T38 section below. Nothing was pushed or published; Git HEAD and status are authoritative for local commit state, and external review evidence will be recorded only after a real verdict.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
-- Previous reviewed documentation commit: `af988ca8a3b12877e3f7bac6de8978d582e06776` (tick T34 docs); the final handoff commit is a separate descendant and did not amend it.
+- Previous reviewed candidate: `480927ec1eccbbcecfd71a5c3beeb4102106a767` (tick T38 substantive candidate `game_disconnect_signal` registry migration; MiniMax-M3 read-only fallback `VERDICT | ACCEPT`, NeuralWatt infrastructure NO-VERDICT — see T38 section). The current docs handoff commit is a separate descendant and does not amend it; do not embed a self-referential docs hash here.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
 
 ## Current package — game_disconnect_signal registry migration (tick T38)
@@ -24,7 +24,34 @@
   registry ownership and retained legacy case; focused GREEN passed 6/6.
   Final gates: full 923/923 (917 prior + 6 new), build pass, audit found zero
   vulnerabilities, and `git -c core.whitespace=cr-at-eol diff --check` pass.
-  No external review is claimed.
+- Review state for the exact committed candidate
+  `480927ec1eccbbcecfd71a5c3beeb4102106a767`:
+  - **NeuralWatt guarded runner: infrastructure NO-VERDICT.** The qualified
+    NeuralWatt runner was attempted against this exact candidate and exited
+    with rc 1; the 53-byte runner log is the single diagnostic line
+    `spawnSync C:\Program Files\nodejs\node.exe ETIMEDOUT`
+    (`C:/Users/mail/AppData/Local/agent-runtime/state/neuralwatt-godot-mcp-review-T38.log`).
+    Pre/post candidate and clean-status fingerprints were identical, so this
+    is recorded as an infrastructure timeout — **neither an ACCEPT nor a
+    REJECT** from NeuralWatt.
+  - **Independent MiniMax-M3 read-only fallback: VERDICT | ACCEPT.** A
+    read-only fallback review of the exact committed range
+    `5c5c993c1d76ff78b263dd02e2ef7194a10b9343..480927ec1eccbbcecfd71a5c3beeb4102106a767`
+    (branch `refactor/core-hardening`) returned `VERDICT | ACCEPT` with zero
+    findings and unchanged pre/post HEAD at
+    `480927ec1eccbbcecfd71a5c3beeb4102106a767` and unchanged clean status.
+    The reviewer confirmed exact schema, capability (`edit`), private
+    handler, the connect → disconnect → emit ordering, the exact
+    `disconnect_signal` bridge mapping and missing-argument error envelope,
+    the seven-file scope, 17 registered tools / 141 legacy cases and
+    flat-list entries / 158 unique advertised names, and truthful current
+    docs. Full local evidence is at
+    `C:/Users/mail/AppData/Local/agent-runtime/state/minimax-tick-T38-verdict.txt`.
+  - The MiniMax-M3 fallback ACCEPT **does not satisfy** the eventual
+    final-candidate requirement for an exact NeuralWatt review of the
+    release candidate, and the package is **not** final-candidate ready
+    on that basis. No push, publication, PR, release, package upload, or
+    candidate-ready notification.
 
 ## Current package — game_connect_signal registry migration (tick T37)
 
