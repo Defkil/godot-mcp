@@ -27,7 +27,6 @@ import {
   REVERSE_PARAMETER_MAPPINGS,
   normalizeParameters,
   convertCamelToSnakeCase,
-  validatePath,
   createErrorResponse,
   isGodot44OrLater,
   generateGodotProjectFeatures,
@@ -7194,23 +7193,30 @@ Output: ${stdout}` }] };
     const results: any[] = [];
     let filesWithErrors = 0;
     const toCheck: string[] = [];
+    const canonicalByRel = new Map<string, string>();
     // Reject explicit `args.scriptPaths` user input through the same
     // canonical-project-member contract the sibling `core_file_io` /
     // `manage_shader` / `set_main_scene` / `manage_translations` /
     // `manage_scene_signals / manage_theme_resource /
     // manage_scene_structure` gates already enforce. The lexical
-    // `validatePath` boundary only rejects empty / `..` / null-byte
-    // strings and lets absolute paths through (so e.g.
-    // `C:/Windows/System32/evil.gd` reaches `existsSync(join(projectRoot,
-    // 'C:/Windows/System32/evil.gd'))`, which silently looks for the
+    // `validatePath` boundary only rejected empty / `..` / null-byte
+    // strings and let absolute paths through (so e.g.
+    // `C:/Windows/System32/evil.gd` reached `existsSync(join(projectRoot,
+    // 'C:/Windows/System32/evil.gd'))`, which silently looked for the
     // path relative to the project root instead of inside the project
     // root). Resolving through `pathPolicy.resolveProjectMember` first
     // surfaces the canonical-member rejection as a typed
     // `isError: true` envelope BEFORE any per-file `existsSync` /
-    // `runGdScriptCheck` call. Internal-relative paths from
-    // `listChangedGdFiles` / `listAllGdFiles` continue to flow through
-    // the lexical `validatePath(rel)` check at line 7062 because they
-    // are already produced by trusted internal scanners.
+    // `runGdScriptCheck` call.
+    //
+    // The same gate is then enforced per-`rel` inside the inner loop so
+    // scanner output from `listChangedGdFiles` / `listAllGdFiles`
+    // (currently produced by trusted internal walkers rooted at
+    // `projectRoot`) is also routed through the canonical-member check.
+    // That prevents a hijacked or future scanner (or any other caller of
+    // the inner loop) from routing an absolute host path or a
+    // symlink-escape path past the lexical `validatePath(rel)` line and
+    // into `existsSync` / `runGdScriptCheck`.
     if (explicit) {
       for (const candidate of candidates as string[]) {
         try {
@@ -7221,15 +7227,33 @@ Output: ${stdout}` }] };
       }
     }
     for (const rel of candidates) {
-      if (!/\.gd$/i.test(rel) || !validatePath(rel)) {
+      if (!/\.gd$/i.test(rel)) {
         if (explicit) results.push({ scriptPath: rel, checked: false, error: 'Not a valid .gd path' });
         continue;
       }
-      if (!existsSync(join(projectRoot, rel))) {
+      // Canonical-member gate (replaces the lexical `validatePath(rel)`
+      // check so absolute host paths and symlink escapes that pass the
+      // lexical check cannot reach `existsSync` / `runGdScriptCheck`).
+      // The resolved path is the canonical realpath; it is used both as
+      // the `existsSync` target and as the `runGdScriptCheck` argument
+      // so downstream code observes the canonical form. The original
+      // `rel` is preserved in the response contract.
+      let canonicalRel: string;
+      try {
+        canonicalRel = this.pathPolicy.resolveProjectMember(projectRoot, rel);
+      } catch {
+        if (explicit) results.push({ scriptPath: rel, checked: false, error: 'Not a valid .gd path' });
+        continue;
+      }
+      if (!existsSync(canonicalRel)) {
         if (explicit) results.push({ scriptPath: rel, checked: false, error: 'Script does not exist' });
         continue;
       }
+      // Track the canonical path alongside the response-shape `rel` so
+      // `runGdScriptCheck` runs against the canonical realpath while
+      // the response still reports the user's relative form.
       toCheck.push(rel);
+      canonicalByRel.set(rel, canonicalRel);
     }
 
     const MAX_BATCH = 60;
@@ -7237,7 +7261,8 @@ Output: ${stdout}` }] };
       return createErrorResponse(`Too many scripts to validate (${toCheck.length} > ${MAX_BATCH}). Narrow the scope or pass an explicit scriptPaths list.`);
 
     for (const rel of toCheck) {
-      const check = await this.runGdScriptCheck(projectRoot, join(projectRoot, rel));
+      const target = canonicalByRel.get(rel) ?? join(projectRoot, rel);
+      const check = await this.runGdScriptCheck(projectRoot, target);
       if (!check.completed) {
         results.push({ scriptPath: rel, checked: false, error: check.error });
       } else {

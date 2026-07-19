@@ -615,9 +615,58 @@ Oliver explicitly approves the exact reviewed candidate.
     `validatePath(...)` invocation remains in `handleRunProject`.
 
     The deferred lexical `validatePath` callers in
-    `handleValidateScripts` (line 7062 / line 7200) remain the
-    next-follow-up because they operate on internal relative
-    paths from `listChangedGdFiles` / `listAllGdFiles` (trusted
-    internal scanners), not user input; explicit
-    `args.scriptPaths` user input is already gated by
-    `pathPolicy.resolveProjectMember` from item 25.
+        `handleValidateScripts` (line 7062 / line 7200) remain the
+        next-follow-up because they operate on internal relative
+        paths from `listChangedGdFiles` / `listAllGdFiles` (trusted
+        internal scanners), not user input; explicit
+        `args.scriptPaths` user input is already gated by
+        `pathPolicy.resolveProjectMember` from item 25.
+
+    29. The `handleValidateScripts` inner-loop scanner-output check was the
+        last remaining active-code lexical `validatePath(...)` call in the
+        source tree. The handler historically opened every candidate `rel`
+        string from `listChangedGdFiles` / `listAllGdFiles` with
+        `if (!/\.gd$/i.test(rel) || !validatePath(rel))`, where the lexical
+        `validatePath` only rejected empty / `..` / null-byte strings and let
+        absolute host paths (e.g. `C:/Windows/System32/evil.gd`) through.
+        A scanner-produced relative path whose canonical realpath resolved
+        outside the project root via a symlink (e.g. `<projectRoot>/scripts`
+        is a symlink to a directory outside the project root) would pass the
+        lexical check, satisfy `existsSync(join(projectRoot, rel))` because
+        `existsSync` follows the symlink, and queue the file for
+        `runGdScriptCheck`. The takeover now applies the canonical
+        `pathPolicy.resolveProjectMember(projectRoot, rel)` contract the
+        sibling `core_file_io` / `manage_shader` / `set_main_scene` /
+        `manage_translations` / `script-resource-handler` /
+        `info-scene-settings-handler` /
+        `manage_scene_signals / manage_theme_resource /
+        manage_scene_structure` gates already enforce on every member path,
+        returning a typed `isError: true` envelope (or, for the
+        non-explicit-scanner branch, silently dropping the file) BEFORE any
+        `existsSync` / `runGdScriptCheck` call when the canonical-member
+        check throws. The original `rel` is preserved in the response
+        contract so the tool's documented output shape is unchanged; the
+        canonical realpath is forwarded into `existsSync` and
+        `runGdScriptCheck` so downstream code observes the canonical form.
+        The legacy `validatePath` helper has been retired alongside its
+        last active call site: the function definition is deleted from
+        `src/utils.ts`, the export is removed from the `src/server.ts`
+        import block, the `tests/utils.test.ts` `describe('validatePath')`
+        block is removed, and `tests/handlers.test.ts`'s `fakeHeadlessOp`
+        test stub mirrors the production `headlessOp` behavior by
+        rejecting `..`-bearing paths with the same canonical-root error
+        message. Wire-level coverage in
+        `tests/validate-scripts-handler-injection.test.ts` (now 5 tests, +2
+        new): a scanner-output symlink-escape path is intercepted BEFORE
+        `runGdScriptCheck` fires, and a scanner-output
+        `scripts/player.gd` path is accepted and forwarded to
+        `runGdScriptCheck`. A source-text assertion in
+        `tests/handlers.test.ts` confirms the `handleValidateScripts` body
+        contains `pathPolicy.resolveProjectMember(projectRoot, rel)` and
+        no remaining active-code `validatePath(...)` invocation. The
+        previous eleven PathPolicy migration packages (items 14-26 plus
+        `handleAttachScript` and `headlessOp`) closed the
+        request-boundary `assertSafeToolPaths` guard and the handler-body
+        `pathPolicy.assertProject` + `pathPolicy.resolveProjectMember`
+        gate on every project-bearing tool. This package retires the last
+        lexical boundary that survived that sweep.

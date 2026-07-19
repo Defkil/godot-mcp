@@ -1,116 +1,186 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-19 (tick T26)
+- Timestamp: 2026-07-19 (tick T27)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: gate `handleRunProject.args.scene` against the canonical `PathPolicy.resolveProjectMember(projectPath, args.scene)` contract, replacing the last remaining lexical `validatePath(args.scene)` boundary on user input. Wire-level coverage in `tests/run-project-scene-pathpolicy-gate.test.ts` (4 tests: `..` traversal rejected, absolute host path rejected, forward/back slash mixed traversal rejected, benign `res://scenes/Main.tscn` accepted and forwarded verbatim into the `spawnProcess` cmdArgs). `tests/handlers.test.ts` adds a focused source-text assertion confirming non-comment lines of `handleRunProject` both contain the new `pathPolicy.resolveProjectMember(projectPath, args.scene)` call AND have no remaining active-code `validatePath(...)` invocation. The verbatim `args.scene` (with its native `res://` or relative prefix) is forwarded into `cmdArgs` so Godot's CLI parser still observes its documented contract; only the canonical-member check fires first.
+- Current local package: retire the last active-code lexical `validatePath(...)` boundary by gating `handleValidateScripts` inner-loop scanner output through the canonical `pathPolicy.resolveProjectMember(projectRoot, rel)` contract, then delete the `validatePath` helper from `src/utils.ts`. Wire-level coverage in `tests/validate-scripts-handler-injection.test.ts` (5 tests total, +2 new this tick): a scanner-output symlink-escape path (`scripts/evil.gd` where `<projectRoot>/scripts` is a directory symlink pointing OUTSIDE the project root) is intercepted BEFORE `runGdScriptCheck` fires (the canonical-member gate throws because the canonical realpath escapes the project root), and a scanner-output `scripts/player.gd` path is accepted and forwarded to `runGdScriptCheck`. `tests/handlers.test.ts` adds a focused source-text assertion confirming non-comment lines of `handleValidateScripts` both contain the new `pathPolicy.resolveProjectMember(projectRoot, rel)` call AND have no remaining active-code `validatePath(...)` invocation. The canonical realpath returned by `resolveProjectMember` is forwarded into `existsSync` and `runGdScriptCheck`; the original `rel` is preserved in the response contract so the tool's documented output shape is unchanged. The `validatePath` helper is removed from `src/utils.ts`, the `src/server.ts` import is dropped, `tests/utils.test.ts`'s `describe('validatePath')` block is removed, and `tests/handlers.test.ts`'s `fakeHeadlessOp` test stub mirrors the production `headlessOp` behavior by rejecting `..`-bearing paths.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `7f8e01317f64f05f05cd08a4d4e8ce6f9023a3be`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
 
-## Current package — Windows JSON quoting helper (Coding-Solo#49)
+## Current package — handleValidateScripts inner-loop PathPolicy gate and validatePath retirement
 
-The AGY package-selection prompt for this tick reviewed the documented
-partial/open gaps in `docs/maintainers/issue-inventory.md` and selected
-Coding-Solo#49 (Windows JSON quoting) as the highest-priority bounded
-next package that can be implemented and verified on this Windows host
-WITHOUT a real Godot binary. The investigation confirmed that Node's
-default `spawn(command, [args], { shell: false })` already preserves
-JSON operation parameters containing Windows path backslashes,
-embedded double quotes, and Unicode — the historical corruption mode
-the original issue described does not reproduce on Node ≥ 20.
+The previous eleven PathPolicy migration packages closed the
+request-boundary `assertSafeToolPaths` guard and the handler-body
+`pathPolicy.assertProject` + `pathPolicy.resolveProjectMember` gate
+on every project-bearing tool. The lexical `validatePath(...)` helper
+in `src/utils.ts` survived that sweep at exactly one call site: the
+inner-loop scanner-output check inside `handleValidateScripts`. That
+single call (`if (!/\.gd$/i.test(rel) || !validatePath(rel))` at line
+7224) is the last remaining active-code lexical boundary in the source
+tree. The lexical helper only rejects empty / `..` / null-byte strings
+and lets absolute host paths through, so a scanner-produced relative
+path whose canonical realpath resolves outside the project root via a
+symlink (e.g. `<projectRoot>/scripts` is a directory symlink to a
+directory outside the project root) passes the lexical check, satisfies
+`existsSync(join(projectRoot, rel))` because `existsSync` follows the
+symlink, and queues the file for `runGdScriptCheck`. The takeover now
+applies the canonical `pathPolicy.resolveProjectMember(projectRoot,
+rel)` contract the sibling `core_file_io` / `manage_shader` /
+`set_main_scene` / `manage_translations` /
+`manage_scene_signals / manage_theme_resource /
+manage_scene_structure` gates already enforce on every member path.
+The canonical realpath returned by `resolveProjectMember` is forwarded
+into `existsSync` and `runGdScriptCheck` so downstream code observes
+the canonical form; the original `rel` is preserved in the response
+contract so the tool's documented output shape is unchanged. The
+legacy `validatePath` helper is retired alongside its last active call
+site: the function definition is deleted from `src/utils.ts`, the
+export is removed from the `src/server.ts` import block, the
+`tests/utils.test.ts` `describe('validatePath')` block is removed, and
+`tests/handlers.test.ts`'s `fakeHeadlessOp` test stub mirrors the
+production `headlessOp` behavior by rejecting `..`-bearing paths with
+the same canonical-root error message.
 
-The package has two coherent changes:
+The package has four coherent changes:
 
-1. **`src/godot/windows-argv.ts`** (new, 99 lines) — pure helper module
-   exporting three documented Microsoft `CommandLineToArgvW` quoting
-   primitives:
-   - **`quoteForCommandLineToArgvW(token)`** — wraps a single argv
-     token in double quotes and escapes any embedded double quotes as
-     `\"`, doubling any trailing backslashes that immediately precede
-     the closing quote per the standard rule (2n backslashes become n
-     literal backslashes + literal `"`; 2n+1 backslashes become n
-     literal backslashes + escaped `"`). This is the same rule
-     Microsoft's `CommandLineToArgvW` parser uses, so the round-trip
-     is byte-stable for arbitrary UTF-8, embedded double quotes, and
-     Windows paths containing backslashes.
-   - **`formatWindowsVerbatimArgv(command, args)`** — composes the
-     helper into a single pre-formatted command-line string suitable
-     for `spawn(cmdline, { shell: false, windowsVerbatimArguments: true })`.
-     The helper output is the literal bytes `CreateProcessW` will
-     receive; the child's `OS::get_cmdline_args()` (which Godot uses)
-     is `CommandLineToArgvW`-compatible, so the round-trip is
-     byte-stable for every supported argv token.
-   - **`needsWindowsVerbatimArgv()`** — returns `true` only on
-     `process.platform === 'win32'`. The verbatim path is silently
-     ignored by Node outside Windows, so this guard is required for
-     portable callers.
+1. **`src/server.ts`** — focused gate addition to `handleValidateScripts`,
+   matching the sibling `core_file_io` / `manage_shader` /
+   `set_main_scene` / `manage_translations` /
+   `manage_scene_signals / manage_theme_resource /
+   manage_scene_structure` / `script-resource-handler` pattern exactly.
+   Per-handler shape:
 
-2. **`tests/operation-runner-windows-argv.test.ts`** (new, 9 tests)
-   and **`tests/fixtures/win32-arg-echoer.cjs`** (new, 18 lines) —
-   wire-level coverage that proves the runner preserves JSON params
-   through the Windows process boundary. Each test exercises the
-   real `runHeadlessOperation` (or the helper in isolation) with a
-   temporary fixture, removed in `afterEach`. The 9 tests cover:
-   - **`quoteForCommandLineToArgvW`** (5 tests): plain ASCII wraps
-     unchanged; embedded double quotes escape to `\"`; trailing
-     backslashes before the closing `"` double per spec; Unicode
-     characters preserved without escaping; a seven-fixture round-trip
-     through a `CommandLineToArgvW`-equivalent parser confirms the
-     output is parseable.
-   - **`needsWindowsVerbatimArgv`** (1 test): returns `true` on
-     `win32`, `false` elsewhere.
-   - **`formatWindowsVerbatimArgv`** (1 test): produces a single
-     command-line string with every arg individually quoted and the
-     JSON payload escaped correctly.
-   - **`runHeadlessOperation` Windows round-trip** (2 tests, gated on
-     `process.platform === 'win32'`): a real Node child receives the
-     JSON params byte-for-byte and `JSON.parse(result.paramsJson)`
-     equals the original fixture; this covers the original
-     Coding-Solo#49 regression class (JSON payloads beginning with
-     `\"`) and the broader Windows-path-backslashes + embedded-quotes
-     edge case. The test injects a `spawnProcess` override that
-     forwards the runner's `args[args.length - 1]` (the `paramsJson`)
-     to a real Node child running the echoer fixture so the wire is
-     exercised end-to-end without spawning the real Godot binary.
+   - **`handleValidateScripts`** — the inner-loop per-`rel` validation
+     that runs after the `listChangedGdFiles` / `listAllGdFiles`
+     scanners is rewritten from a lexical `validatePath(rel)` line to
+     a `pathPolicy.resolveProjectMember(projectRoot, rel)` call. The
+     resolved canonical realpath is used as the `existsSync` target
+     and as the `runGdScriptCheck` argument so downstream code
+     observes the canonical form. A `canonicalByRel: Map<string,
+     string>` is populated alongside `toCheck` so the second loop
+     knows which canonical path to validate without re-resolving it.
+     The original `rel` is preserved in the response contract. The
+     `validatePath` export is removed from the `src/utils.js` import
+     block. The package preserves every existing canonical-root gate
+     (`pathPolicy.assertProject` on `args.projectPath`), every
+     explicit-scriptPath gate from item 25, the strict-`.gd` extension
+     check, the per-scope branches (`changed` / `all` / explicit),
+     the `MAX_BATCH` ceiling, the success-message shape, and the
+     post-condition response envelope.
 
-3. **`tests/fixtures/win32-arg-echoer.cjs`** (new, 18 lines including
-   the final newline) — a tiny Node CommonJS script that reads its
-   own argv (`process.argv.slice(2)`) and emits the LAST argument as
-   a Godot-shaped `GODOT_MCP_RESULT=` envelope. Lives under
-   `tests/fixtures/` so it can be reused by future Windows-argv
-   regression tests without polluting the project tree.
+   The diff adds 30 insertions, 7 deletions across the inner loop,
+   `canonicalByRel` declaration, and `validatePath` import removal.
+   The diff adds no new helper modules, no schema changes, no handler
+   signature changes, no capability policy changes, no BridgeClient
+   changes, and no changes to `headlessOp` itself or to any other
+   handler. The diff intentionally preserves every comment that
+   documents the historical lexical boundary — those references
+   remain useful to a future maintainer who wants to audit the
+   migration history.
 
-The package preserves every existing tool contract, every schema,
-the package identity, the path policy, the operation runner, the
-capability policy, the request limiter, the bridge client, the MIT
-attribution, and the truthful docs. The diff adds 0 modifications to
-`src/godot/operation-runner.ts` — the runner keeps the default
-`{ shell: false, windowsHide: true }` spawn options on both POSIX
-and Windows because (a) Node v24.17.0 already preserves the
-JSON-with-backslash-quote cases the original issue described, and
-(b) switching to `windowsVerbatimArguments: true` on Windows would
-corrupt executable discovery for paths containing spaces (e.g.
-`C:\Program Files\...`) because Node's spawn constructs the cmdline
-by joining args with spaces and `CreateProcessW` re-parses the first
-token as the executable name — the verified failure mode on this host
-during the investigation was a child Node receiving the runner's
-`<projectPath>` argument as its argv[0] because Node's verbatim
-construct had not prepended the executable.
+2. **`src/utils.ts`** — the legacy `validatePath` function definition
+   is deleted entirely (the file shrinks by 7 lines). No remaining
+   caller imports it; the focused `tests/handlers.test.ts` stub
+   replaces its single inline use.
 
-Gates green: `npm test` 51 files / 851 tests (was 50 files / 842
-tests; +9 new tests from this package), `npm run build` clean,
-`npm audit --audit-level=high` zero, `git diff --check` clean.
+3. **`tests/validate-scripts-handler-injection.test.ts`** (now 5
+   tests, +2 new this tick) — the file's header comment is updated to
+   document the two-layer gate (explicit `args.scriptPaths` from item
+   25 plus the new inner-loop scanner-output gate), and two new
+   behavioral tests are added under a new
+   `describe('validate_scripts inner-loop scanner output is gated by
+   PathPolicy.resolveProjectMember', ...)` block. Each test uses a
+   temporary Godot project under the OS temp directory, removed in
+   `afterEach`. The 2 new tests cover:
 
-The remaining deferred items from the previous handoff (the three
-intentional lexical-`validatePath` boundaries: shared `headlessOp`
-which is already gated with `pathPolicy.assertProject`,
-`handleRunProject` `args.scene` runtime CLI argument, and
-`handleValidateScripts` inner-loop `rel` lexical check for trusted
-scanner output) are unchanged. Real Godot end-to-end verification of
-the JSON-arg round-trip in a live Godot runtime remains the
-next-follow-up release gate.
+   - **Symlink escape rejected before runGdScriptCheck fires** —
+     creates a directory symlink at `<projectRoot>/scripts` that
+     points OUTSIDE the project root (via `symlinkSync(outside,
+     scriptsLink, 'dir')`), writes a `evil.gd` file in the outside
+     directory, monkey-patches `(server as any).listAllGdFiles` to
+     return `['scripts/evil.gd']`, monkey-patches `(server as
+     any).runGdScriptCheck` with a spy that returns `{ completed:
+     true, errors: [] }`, and asserts (a) `runSpy` was NOT called
+     (the gate fires before the script check), and (b) the result
+     body reports `fileCount: 0` and an empty `results` array. The
+     symlink creation is gracefully skipped if the host does not
+     permit directory symlinks (the test is defense-in-depth, not a
+     release-blocker; verified locally on this Windows host that
+     `symlinkSync` with `dir` type works without elevation).
+   - **Benign scanner-produced .gd path accepted and forwarded** —
+     creates `scripts/player.gd` in the project root, monkey-patches
+     the scanner to return `['scripts/player.gd']`, monkey-patches
+     `runGdScriptCheck` with a spy, and asserts (a) `runSpy` was
+     called exactly once, (b) the result body reports `fileCount: 1`
+     and the `scriptPath` in the result is the original `rel` (not
+     the canonical realpath), proving the response-contract
+     preservation.
+
+   The script invokes the private handler method directly via
+   `(server as any).handleValidateScripts(args)` (bypassing
+   `tools/call`), the same wiring pattern as the sibling
+   `manage-scene-signals-theme-resource-scene-structure-handler-injection`
+   gate, so the wire-level coverage proves the gate lives in the
+   handler body itself, not only in the request-boundary guard.
+
+4. **`tests/handlers.test.ts`** — two focused updates:
+
+   - **Source-text assertion** — adds a new `it('handleValidateScripts
+     inner-loop scanner output is gated by
+     pathPolicy.resolveProjectMember (no lexical validatePath(rel) in
+     active code)', ...)` test that anchors the
+     `handleValidateScripts` body via `private async
+     handleValidateScripts(args: any) {` (start) and `private async
+     handleCreateScript(args: any) {` (next sibling) and confirms
+     both that `pathPolicy.resolveProjectMember(projectRoot, rel)`
+     appears in active code AND that no active-code `validatePath(`
+     invocation remains. The pattern matches the existing
+     `handleRunProject validates args.scene through the canonical
+     PathPolicy contract` test from tick T26.
+   - **`fakeHeadlessOp` test stub update** — the local helper that
+     mirrors the production `headlessOp` argument-validation flow
+     now mirrors the canonical `pathPolicy.assertProject` behavior
+     (rejecting `..`-bearing paths with the same `'Invalid path.'`
+     error message) rather than calling the deleted `validatePath`
+     import. The `validatePath` import is removed from the
+     `tests/handlers.test.ts` import block.
+
+5. **`tests/utils.test.ts`** — the
+   `describe('validatePath', ...)` block (4 it-blocks) is removed
+   alongside the `validatePath` function definition so the suite has
+   no stale references to a symbol that no longer exists. The
+   `validatePath` import is removed from the
+   `tests/utils.test.ts` import block. No other test was affected
+   because `validatePath` was never an internal implementation
+   detail of any other module.
+
+The package:
+
+- preserves all 158 tools, schemas, capability profiles, package
+  identity, native Windows behavior, runtime/bridge behavior, MIT
+  attribution, and every existing `validate_scripts` contract
+  (response envelope shape, `MAX_BATCH = 60` ceiling, scope
+  branches `changed` / `all` / explicit, per-scope result
+  handling, the `Script does not exist` and `Not a valid .gd path`
+  per-`rel` error surfaces for the explicit-scriptPath branch);
+- does **not** change the documented tool response shape — the
+  `scriptPath` field in `results[]` is still the original `rel`
+  form (the canonical realpath is an internal detail of the
+  `runGdScriptCheck` call);
+- does **not** push, publish, create a PR/release, upload a
+  package, write `docs/maintainers/release-candidate.md`, or send
+  the candidate-ready notification.
+
+The remaining deferred items from this package are unchanged from
+previous ticks: real-Godot end-to-end verification of the
+`validate_scripts` round-trip, the wired `BridgeClient` reconnect
+flow (Coding-Solo#84), the C# / .NET attach round-trip
+(Coding-Solo#114), the asset-import prerequisite sidecar run
+(Coding-Solo#103), and the `update_project_uids` round-trip
+(Coding-Solo#102) remain the next-follow-up release gates for a
+Godot-equipped host.
 
 ## Current package — gate shared headlessOp with canonical PathPolicy contract
 
@@ -3447,3 +3517,104 @@ gates for downstream runtime verification on a Godot-equipped host.
 Do not push, publish, create a PR/release, upload a package, write
 `docs/maintainers/release-candidate.md`, or send the
 candidate-ready notification.
+
+
+## Verification on the package filesystem (tick T27)
+
+- `npx vitest run tests/validate-scripts-handler-injection.test.ts`:
+  1 file, 5 tests passed (RED 1/5 confirmed before the fix on the
+  scanner-output symlink-escape branch; GREEN 5/5 after the
+  `pathPolicy.resolveProjectMember(projectRoot, rel)` migration
+  landed). The benign accept test confirms the canonical realpath
+  is forwarded into `runGdScriptCheck` while the response contract
+  preserves the original `rel` form.
+- `npx vitest run tests/handlers.test.ts`: 1 new handler-source
+  test added (`handleValidateScripts inner-loop scanner output is
+  gated by pathPolicy.resolveProjectMember (no lexical
+  validatePath(rel) in active code)`); the `fakeHeadlessOp` test
+  stub was updated to mirror the canonical `pathPolicy.assertProject`
+  behavior; all other tests remain green.
+- `npm test`: 52 files, 855 tests passed (was 856 before this
+  package; net change -1 because the 4 `describe('validatePath')`
+  tests in `tests/utils.test.ts` were removed alongside the helper,
+  +2 new tests in `tests/validate-scripts-handler-injection.test.ts`,
+  +1 new handler-source test in `tests/handlers.test.ts`).
+- `npm run build`: passed; TypeScript compiled, scripts copied to
+  `build/scripts/`.
+- `npm audit --audit-level=high`: 0 vulnerabilities.
+- `git diff --check`: passed (exit 0; only the standard LF/CRLF
+  Windows-native line-ending notice remains, which is the
+  repo-default invariant and does not affect content).
+
+Any source, test, documentation, build/import, generated-artifact,
+amend, or cleanup edit after these commands invalidates the
+relevant evidence and requires the gates to be rerun on the final
+committed state.
+
+## Review state (tick T27)
+
+- The capability-policy package through `37facdf` has an independent
+  NeuralWatt `VERDICT | ACCEPT` with unchanged HEAD/status
+  fingerprints.
+- The network-classification package `79b1d4d` also has an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The request-limiter registry-leak repair `9bc4a2d` received an
+  independent NeuralWatt `VERDICT | ACCEPT`.
+- The Windows JSON quoting helper `9d7eddfa` had an independent
+  NeuralWatt `VERDICT | ACCEPT` with unchanged HEAD/status
+  fingerprints and the non-blocking observations have already been
+  resolved in `625ae08`.
+- The focused test-file packages (round-trip contract `cbfe594`,
+  tween bridge `2ef0b1a`, physics-frame `game_wait` `aff7ca1`,
+  C# / .NET gate `ec07f4b`, autoload injection `6d76606`,
+  asset-import-prerequisite `88dda1e` / `76c9207`, Defkil fork
+  package identity rebase `a1cae8b`, manage-layers / manage-plugins
+  injection `3874d81`, set_main_scene / manage_translations injection
+  `6407446`, manage_shader injection `9cd5ac4`,
+  manage_ci_pipeline / manage_docker_export injection `9eef5cd`,
+  core-file-IO defense-in-depth `b9fe537`, script/resource
+  defense-in-depth `383aae3`, manage_input_map / manage_export_presets
+  injection `dc6172e`, info / scene / settings / sprite /
+  mesh-library / export PathPolicy gate `446964b`,
+  manage_autoloads / manage_input_map / manage_export_presets
+  PathPolicy gate `571ef14`,
+  manage_scene_signals / manage_theme_resource /
+  manage_scene_structure PathPolicy gate `68b45be`,
+  create_project / create_csharp_script / validate_scripts
+  PathPolicy gate `fa766a2`, handleAttachScript canonical-root
+  forwarding `a22c559`, shared `headlessOp` PathPolicy gate
+  `732d757`, `handleRunProject args.scene` PathPolicy gate
+  `250acb5`, and this `handleValidateScripts inner-loop
+  PathPolicy gate and validatePath retirement` package) are each a
+  focused test file (or test file + minimal handler edits + helper
+  retirement) and do not require an independent NeuralWatt dispatch
+  on every package.
+- No Claude model was invoked.
+- No release-candidate file or candidate-ready notification exists.
+
+## Next safe action
+
+The previous eleven PathPolicy migration packages closed every
+request-boundary and handler-body path gate on every project-bearing
+tool. This package retires the last surviving lexical `validatePath`
+helper at its last active call site (`handleValidateScripts`
+inner-loop scanner output) and removes the helper itself. The
+PathPolicy hardening sweep is complete at the source-tree level. The
+remaining partial / open gaps (real-Godot end-to-end verification of
+`validate_scripts`, the wired `BridgeClient` reconnect flow
+(Coding-Solo#84), the C# / .NET attach round-trip (Coding-Solo#114),
+the asset-import prerequisite sidecar run (Coding-Solo#103), the
+`update_project_uids` round-trip (Coding-Solo#102), the GUT
+integration (Coding-Solo#29), and the remaining registry migration
+items for tugcantopaloglu#12) require a Godot 4.7 binary runtime
+on a downstream host. They are next-follow-up release gates, not
+next-tick blocking work on this Windows host. No external
+publication, push, PR, release, package upload, or
+candidate-ready notification is authorized; the next tick should
+review the committed candidate, run an independent NeuralWatt
+review on this exact commit, and either accept the package (close
+the PathPolicy hardening epic at the source-tree level) or queue a
+focused repair against a specific finding. Do not push, publish,
+create a PR/release, upload a package, write
+`docs/maintainers/release-candidate.md`, or send the
+candidate-ready notification without explicit user approval.

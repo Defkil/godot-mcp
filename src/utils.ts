@@ -203,13 +203,6 @@ export function convertCamelToSnakeCase(params: OperationParams): OperationParam
   return result;
 }
 
-export function validatePath(path: string): boolean {
-  if (!path || path.includes('..')) {
-    return false;
-  }
-  return true;
-}
-
 export function createErrorResponse(message: string): any {
   console.error(`[SERVER] Error response: ${message}`);
 

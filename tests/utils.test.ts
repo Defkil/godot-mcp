@@ -4,9 +4,15 @@ import {
   REVERSE_PARAMETER_MAPPINGS,
   normalizeParameters,
   convertCamelToSnakeCase,
-  validatePath,
   createErrorResponse,
   isGodot44OrLater,
+  generateGodotProjectFeatures,
+  generateCsprojContent,
+  generateCsharpScriptSource,
+  toDotnetIdentifier,
+  isValidCsharpIdentifier,
+  parseGodotScriptDiagnostics,
+  collectGdPaths,
 } from '../src/utils.js';
 
 describe('PARAMETER_MAPPINGS', () => {
@@ -151,29 +157,6 @@ describe('convertCamelToSnakeCase', () => {
   it('preserves already snake_case keys', () => {
     const result = convertCamelToSnakeCase({ already_snake: 'value' });
     expect(result).toEqual({ already_snake: 'value' });
-  });
-});
-
-describe('validatePath', () => {
-  it('returns true for valid paths', () => {
-    expect(validatePath('/home/user/project')).toBe(true);
-    expect(validatePath('scenes/main.tscn')).toBe(true);
-    expect(validatePath('C:\\Users\\test')).toBe(true);
-  });
-
-  it('returns false for paths with ..', () => {
-    expect(validatePath('../../../etc/passwd')).toBe(false);
-    expect(validatePath('foo/../bar')).toBe(false);
-    expect(validatePath('..')).toBe(false);
-  });
-
-  it('returns false for empty string', () => {
-    expect(validatePath('')).toBe(false);
-  });
-
-  it('returns false for null/undefined', () => {
-    expect(validatePath(null as any)).toBe(false);
-    expect(validatePath(undefined as any)).toBe(false);
   });
 });
 

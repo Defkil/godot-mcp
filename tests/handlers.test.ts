@@ -17,7 +17,6 @@ import { fileURLToPath } from 'url';
 import {
   normalizeParameters,
   convertCamelToSnakeCase,
-  validatePath,
   createErrorResponse,
 } from '../src/utils.js';
 
@@ -58,7 +57,11 @@ function fakeHeadlessOp(
   args = normalizeParameters(args || {});
   const { projectPath, params } = argsFn(args);
   if (!projectPath) return { error: 'projectPath is required.', commandArgs: null } as any;
-  if (!validatePath(projectPath)) return { error: 'Invalid path.', commandArgs: null } as any;
+  // The production `headlessOp` helper now resolves the project root
+  // through the canonical `PathPolicy.assertProject` contract; the
+  // test stub mirrors that behavior. The lexical `validatePath`
+  // boundary was retired alongside the helper in tick T27.
+  if (projectPath.includes('..')) return { error: 'Invalid path.', commandArgs: null } as any;
   if (!projectExists) return { error: `Not a valid Godot project: ${projectPath}`, commandArgs: null } as any;
   return { error: null, operation: { projectPath, params } };
 }
@@ -1049,6 +1052,40 @@ describe('Handler source structure', () => {
       .split('\n')
       .map(line => line.replace(/\/\/.*$/, ''));
     expect(activeLines.some(line => line.includes('pathPolicy.resolveProjectMember(projectPath, args.scene)'))).toBe(true);
+    expect(activeLines.some(line => /validatePath\(/.test(line))).toBe(false);
+  });
+
+  it('handleValidateScripts inner-loop scanner output is gated by pathPolicy.resolveProjectMember (no lexical validatePath(rel) in active code)', () => {
+    // After tick T27, the only remaining lexical `validatePath(...)`
+    // call site in the source tree was the inner-loop scanner-output
+    // check inside `handleValidateScripts`. The migration replaces the
+    // lexical `validatePath(rel)` line with
+    // `pathPolicy.resolveProjectMember(projectRoot, rel)` so absolute
+    // host paths and symlink escapes cannot reach `existsSync` /
+    // `runGdScriptCheck`. This source-text assertion proves the inner
+    // loop adopted the canonical contract and removed the lexical
+    // call.
+    const startMarker = 'private async handleValidateScripts(args: any) {';
+    const startIndex = sourceCode.indexOf(startMarker);
+    expect(startIndex, 'handleValidateScripts must be present in source').toBeGreaterThanOrEqual(0);
+    // Anchor the body to the next sibling method, which is the
+    // documented `private async handleCreateScript` definition that
+    // immediately follows `handleValidateScripts`.
+    const nextSiblingMarker = 'private async handleCreateScript(args: any) {';
+    const nextSiblingIndex = sourceCode.indexOf(nextSiblingMarker, startIndex);
+    expect(nextSiblingIndex, 'handleCreateScript marker must follow handleValidateScripts').toBeGreaterThan(startIndex);
+    const body = sourceCode.substring(startIndex, nextSiblingIndex);
+    // The canonical-member gate must be present in active code.
+    expect(body).toContain('pathPolicy.resolveProjectMember(projectRoot, rel)');
+    // The lexical `validatePath(` invocation must NOT remain as an
+    // active code path in `handleValidateScripts`. Comments that
+    // document the historical boundary are intentionally preserved;
+    // the assertion below only inspects non-comment lines so the
+    // comment trail does not falsely satisfy the condition.
+    const activeLines = body
+      .split('\n')
+      .map(line => line.replace(/\/\/.*$/, ''));
+    expect(activeLines.some(line => line.includes('pathPolicy.resolveProjectMember(projectRoot, rel)'))).toBe(true);
     expect(activeLines.some(line => /validatePath\(/.test(line))).toBe(false);
   });
 
