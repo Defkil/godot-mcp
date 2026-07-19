@@ -120,6 +120,7 @@ describe('Tool definitions', () => {
       'read_project_settings',
       'read_file',
       'write_file',
+      'delete_file',
     ]);
     for (const name of ALL_TOOL_NAMES) {
       if (!migratedTools.has(name)) expect(sourceCode).toContain(`case '${name}':`);

@@ -1230,6 +1230,28 @@ Output: ${stdout}` }] };
       },
       handler: args => this.handleWriteFile(args),
     });
+    // `delete_file` now derives schema, capability, and dispatch from the
+    // registry while preserving the existing handler contract.
+    this.toolRegistry.register({
+      name: 'delete_file',
+      description: 'Delete a file from a Godot project',
+      capability: 'edit',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Godot project path',
+          },
+          filePath: {
+            type: 'string',
+            description: 'File path relative to project root',
+          },
+        },
+        required: ['projectPath', 'filePath'],
+      },
+      handler: args => this.handleDeleteFile(args),
+    });
 
     // Define available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -1876,18 +1898,6 @@ Output: ${stdout}` }] };
           },
         },
         // File I/O tools (migrated definitions are supplied by toolRegistry)
-        {
-          name: 'delete_file',
-          description: 'Delete a file from a Godot project',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: { type: 'string', description: 'Godot project path' },
-              filePath: { type: 'string', description: 'File path relative to project root' },
-            },
-            required: ['projectPath', 'filePath'],
-          },
-        },
         {
           name: 'create_directory',
           description: 'Create a directory inside a Godot project',
@@ -3682,9 +3692,7 @@ Output: ${stdout}` }] };
       return await this.handleAttachScript(request.params.arguments);
     case 'create_resource':
       return await this.handleCreateResource(request.params.arguments);
-    // File I/O tools (read_file and write_file use the registry path)
-    case 'delete_file':
-      return await this.handleDeleteFile(request.params.arguments);
+    // File I/O tools (read_file, write_file, and delete_file use the registry path)
     case 'create_directory':
       return await this.handleCreateDirectory(request.params.arguments);
     // Error/Log capture tools
