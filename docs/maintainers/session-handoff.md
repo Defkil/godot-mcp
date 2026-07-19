@@ -1,14 +1,21 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-19 (tick T29)
+- Timestamp: 2026-07-19 (tick T30)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: tick T29 migrated the next legacy handler, `get_project_info`, to the typed tool registry. The package is a small, bounded incremental step that closes one legacy `case` statement and the matching flat-list block entry while preserving every contract of the existing handler body (PathPolicy `assertProject` on `args.projectPath`, `project.godot` existence check, `getProjectStructureAsync` walker, `isDotnetProject` flag, `execFileAsync(godotPath, ['--version'])` Godot-version probe, and the same JSON response envelope). An independent NeuralWatt packet-only review of the substantive commit `e9f73a4` returned `VERDICT | ACCEPT` with `validFingerprint: true` (pre/post `HEAD` and `git status --porcelain` match) and a persisted result file at `C:/Users/mail/AppData/Local/agent-runtime/state/neuralwatt-godot-mcp-e9f73a4-result.json`. The reviewer verified criterion-by-criterion: registry block (`src/server.ts:1128-1144`), legacy case + flat-list removal, verbatim `handleGetProjectInfo` body preservation, focused wire-level test (`tests/registry-migration-get-project-info.test.ts` 5 tests), test-fixture decrements (8 migrated tools, 158 unique advertised, 150 legacy `case` count), and docs truthfulness (`docs/maintainers/issue-inventory.md` [tugcantopaloglu#12] row + handoff section). One non-blocking observation was reported: the narrative baseline "The previous count was 154" in `tests/handlers.test.ts:2014` was inconsistent with the true 151→150 delta. The docs-only follow-up commit `5dcf6f1` corrected the narrative baseline to 151 so the surrounding comment matches the executable `expect(matches.length).toBe(150)` assertion. Canonical gates re-run after the docs-only follow-up: `npm test` 53 files / 860 tests pass, `npm run build` exit 0, `npm audit --audit-level=high` 0 vulnerabilities, `git diff --check` (Windows LF/CRLF notice). Previous recorded package: retire the last active-code lexical `validatePath(...)` boundary by gating `handleValidateScripts` inner-loop scanner output through the canonical `pathPolicy.resolveProjectMember(projectRoot, rel)` contract, then delete the `validatePath` helper from `src/utils.ts`.
+- Current local package: tick T30 migrated `read_project_settings` to the typed tool registry while preserving the existing projectPath-only schema, `inspect` capability, handler body, structured JSON response, and advertised position between `game_wait` and `game_connect_signal`. TDD evidence: focused RED failed 2/7, then GREEN passed 7/7. Final gates: focused 407/407; full 867/867; build pass; audit zero; diff-check pass. Nothing was pushed or published.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `7f8e01317f64f05f05cd08a4d4e8ce6f9023a3be`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
 
+## Current package — read_project_settings registry migration (tick T30)
+
+- Register `read_project_settings` with capability `inspect`; remove only its legacy flat-list block and switch case; preserve the private handler body.
+- Add seven wire-level tests for registry ownership, exact schema, dispatch, structured readback, PathPolicy denial, case removal, and advertised order.
+- Record 9 migrated tools, 158 unique advertised names, and 149 legacy cases in tests and the issue inventory.
+- Verified before commit: focused 407/407, full 867/867, build pass, audit zero, and diff-check pass. No real-Godot claim: no Godot binary was available.
+- No push, publication, PR, release, package upload, or candidate-ready notification.
 ## Current package — handleValidateScripts inner-loop PathPolicy gate and validatePath retirement
 
 The previous eleven PathPolicy migration packages closed the

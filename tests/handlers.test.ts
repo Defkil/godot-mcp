@@ -2010,9 +2010,10 @@ describe('Tool dispatch routing', () => {
     // Subtract the migrated tools that now resolve through the registry
     // dispatch path and no longer appear as legacy `case` statements:
     // `read_scene`, `modify_scene_node`, `remove_scene_node`,
-    // `classdb_inspect`, and `get_project_info`. The previous count was
-    // 151; this package reduces the legacy surface to 150.
-    expect(matches.length).toBe(150);
+    // `classdb_inspect`, `get_project_info`, and `read_project_settings`.
+    // The previous count was 150; this package reduces the legacy
+    // surface to 149.
+    expect(matches.length).toBe(149);
   });
 
   it('does not let a legacy case fall through', () => {

@@ -117,6 +117,7 @@ describe('Tool definitions', () => {
       'remove_scene_node',
       'classdb_inspect',
       'get_project_info',
+      'read_project_settings',
     ]);
     for (const name of ALL_TOOL_NAMES) {
       if (!migratedTools.has(name)) expect(sourceCode).toContain(`case '${name}':`);

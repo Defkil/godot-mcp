@@ -1142,6 +1142,43 @@ Output: ${stdout}` }] };
       handler: args => this.handleGetProjectInfo(args),
     });
 
+    // `read_project_settings` is the next incremental legacy handler
+    // migrated to the tool registry, following the same pattern as
+    // `get_project_info`. The handler body (handleReadProjectSettings)
+    // is preserved verbatim: it still applies `pathPolicy.assertProject`
+    // to `args.projectPath` before any filesystem reach, verifies the
+    // `project.godot` file exists, parses the section/key/value tree
+    // into a JSON-serializable object, and emits the same
+    // `JSON.stringify(sections, null, 2)` text envelope with every value
+    // preserved as a string. Migrating it removes one `case` line from
+    // the legacy switch and the matching flat-list block entry, and
+    // decreases the legacy-count assertions in
+    // `tests/tool-definitions.test.ts` and `tests/handlers.test.ts`. The
+    // `capabilityForLegacyTool` entry for `read_project_settings` is
+    // retained as redundant defense-in-depth: the registry `has` check
+    // now wins, so the legacy lookup is unreachable for the migrated
+    // tool. The advertised position in the real `tools/list` response
+    // remains compatible with the legacy contract: the registry splice
+    // sits between the legacy `game_wait` entry and the legacy
+    // `game_connect_signal` entry, so the migrated `read_project_settings`
+    // still surfaces between `game_wait` and `game_connect_signal`.
+    this.toolRegistry.register({
+      name: 'read_project_settings',
+      description: 'Read project.godot as structured JSON',
+      capability: 'inspect',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          projectPath: {
+            type: 'string',
+            description: 'Godot project path',
+          },
+        },
+        required: ['projectPath'],
+      },
+      handler: args => this.handleReadProjectSettings(args),
+    });
+
     // Define available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
@@ -1650,20 +1687,6 @@ Output: ${stdout}` }] };
               },
             },
             required: [],
-          },
-        },
-{
-          name: 'read_project_settings',
-          description: 'Read project.godot as structured JSON',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              projectPath: {
-                type: 'string',
-                description: 'Godot project path',
-              },
-            },
-            required: ['projectPath'],
           },
         },
         ...this.toolRegistry.definitions(),
@@ -3611,8 +3634,6 @@ Output: ${stdout}` }] };
     case 'game_wait':
       return await this.handleGameWait(request.params.arguments);
     // Project management tools
-    case 'read_project_settings':
-      return await this.handleReadProjectSettings(request.params.arguments);
     // New runtime signal/animation/group tools
     case 'game_connect_signal':
       return await this.handleGameConnectSignal(request.params.arguments);
