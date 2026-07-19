@@ -1,13 +1,22 @@
 # Godot MCP takeover handoff
 
-- Timestamp: 2026-07-19 (tick T30)
+- Timestamp: 2026-07-19 (tick T31)
 - Worktree: `C:/Workspace/defkil/godot-mcp-wt-takeover`
 - Branch: `refactor/core-hardening`
 - Remote boundary: `origin=https://github.com/Defkil/godot-mcp.git`; nothing pushed or published.
-- Current local package: tick T30 migrated `read_project_settings` to the typed tool registry while preserving the existing projectPath-only schema, `inspect` capability, handler body, structured JSON response, and advertised position between `game_wait` and `game_connect_signal`. TDD evidence: focused RED failed 2/7, then GREEN passed 7/7. Final gates: focused 407/407; full 867/867; build pass; audit zero; diff-check pass. Nothing was pushed or published.
+- Current local package: tick T31 migrated `read_file` to the typed tool registry with capability `inspect`, preserving the `projectPath` + `filePath` schema, the private handler body, the structured `{type:'text',text}` readback, and the canonical PathPolicy (assertProject + resolveProjectMember) already enforced in the handler. The legacy flat-list block and the `case 'read_file':` switch arm are removed together. TDD evidence: focused RED failed 2/7 against the un-migrated source, then GREEN passed 7/7 in `tests/registry-migration-read-file.test.ts`. The full canonical suite in `tests/handlers.test.ts`, `tests/schema-parity.test.ts`, `tests/tool-definitions.test.ts`, and the focused file-I/O / asset-import / script-resource injection suites now reflect the new count. Final gates: focused 7/7; full 874/874; build pass; audit zero; diff-check clean. Nothing was pushed or published.
 - Current HEAD: read the full OID from `git log -1 --format=%H`; the handoff intentionally does not duplicate a self-referential hash.
 - Previous reviewed documentation commit: `7f8e01317f64f05f05cd08a4d4e8ce6f9023a3be`; the final handoff commit is a separate descendant and did not amend it.
 - Worktree requirement: clean after the repair commit; use `git status --porcelain` and `git log -1 --format=%H` as the authoritative current state.
+
+## Current package — read_file registry migration (tick T31)
+
+- Register `read_file` with capability `inspect`; remove only its legacy flat-list block and switch case; preserve the private handler body, the canonical `PathPolicy` gate, and the structured text response.
+- Add seven wire-level tests in `tests/registry-migration-read-file.test.ts` for registry ownership + capability, exact schema, advertised uniqueness, real MCP `tools/call` dispatch + readback, `filePath` PathPolicy denial, `projectPath` outside-allowed-roots denial, legacy case-statement removal, and flat-list block uniqueness (exactly one `name: 'read_file'` source occurrence, inside the registry).
+- Update `tests/schema-parity.test.ts` (registered definition list, capability map, advertised name uniqueness) and `tests/tool-definitions.test.ts` (`migratedTools` set) to include `read_file`; update `tests/handlers.test.ts` "routes every remaining legacy case to a handler" to assert 148 instead of 149.
+- Update `docs/maintainers/issue-inventory.md` `tugcantopaloglu#12` row: 10 migrated tools, 158 advertised names, 148 legacy `case` statements + 148 flat-list entries.
+- Verified before commit: focused 7/7, full 874/874, build pass, audit zero, and `git diff --check` clean. No real-Godot claim: no Godot binary was available; the package exercises registry dispatch + PathPolicy through the real MCP `tools/list` and `tools/call` boundary with a stubbed fixture and a temporary Godot project under the OS temp directory.
+- No push, publication, PR, release, package upload, or candidate-ready notification.
 
 ## Current package — read_project_settings registry migration (tick T30)
 
