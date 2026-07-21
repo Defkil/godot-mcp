@@ -1112,6 +1112,14 @@ class GodotServer {
                 type: 'number',
                 description: 'JPEG quality 0.1-1.0 (only for format="jpg"). Default: 0.8',
               },
+              save_to: {
+                type: 'string',
+                description: 'Write image to this file (user:// or absolute) and return its path, not base64',
+              },
+              viewport_node_path: {
+                type: 'string',
+                description: 'Capture this SubViewport off-screen instead of the main window',
+              },
             },
             required: [],
           },
@@ -4666,11 +4674,24 @@ class GodotServer {
     if (a.wait_frames !== undefined) params.wait_frames = a.wait_frames;
     if (a.format !== undefined) params.format = a.format;
     if (a.quality !== undefined) params.quality = a.quality;
+    if (a.save_to !== undefined) params.save_to = a.save_to;
+    if (a.viewport_node_path !== undefined) params.viewport_node_path = a.viewport_node_path;
 
     try {
       const response = await this.sendGameCommand('screenshot', params, 15000);
       if (response.error) {
         return createErrorResponse(`Screenshot failed: ${response.error}`);
+      }
+      // Render-to-file: the server wrote the image and returned a path, not base64.
+      if (response.path) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Rendered to ${response.abs_path || response.path} (${response.width}x${response.height})`,
+            },
+          ],
+        };
       }
       return {
         content: [
@@ -4706,8 +4727,9 @@ class GodotServer {
 
   private async handleGameClick(args: any) {
     return this.gameCommand('click', args, a => {
+      // normalizeParameters maps node_path -> nodePath (PARAMETER_MAPPINGS), like every other handler.
       const p: Record<string, any> = { button: a.button ?? 1 };
-      if (a.node_path) p.node_path = a.node_path;
+      if (a.nodePath) p.node_path = a.nodePath;
       else { p.x = a.x ?? 0; p.y = a.y ?? 0; }
       return p;
     });

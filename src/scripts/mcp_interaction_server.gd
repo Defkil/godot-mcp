@@ -375,13 +375,27 @@ func _send_response_raw(data: Dictionary) -> void:
 
 # --- Screenshot ---
 func _cmd_screenshot(params: Dictionary = {}) -> void:
+	# viewport_node_path captures an off-screen SubViewport instead of the main window — its texture
+	# renders independently of the OS window, so it works when the window is occluded/minimized (CI).
+	# NOTE: a true `--headless` run has no rendering device, so nothing renders there regardless; use a
+	# real or virtual (Xvfb) display. This path removes the *visible-window* dependency, not the GPU one.
+	var vp: Viewport = get_viewport()
+	var vp_path: String = String(params.get("viewport_node_path", ""))
+	if vp_path != "":
+		var n: Node = get_node_or_null(NodePath(vp_path))
+		if n == null or not (n is Viewport):
+			_send_response({"error": "viewport_node_path not found or not a Viewport: %s" % vp_path})
+			return
+		vp = n as Viewport
+		if vp is SubViewport:
+			(vp as SubViewport).render_target_update_mode = SubViewport.UPDATE_ONCE
 	# wait_frames lets callers skip mid-transition frames; default 1 = "let this frame finish rendering".
 	var wait_frames: int = maxi(1, int(params.get("wait_frames", 1)))
 	for _i in wait_frames:
 		await get_tree().process_frame
-	var image: Image = get_viewport().get_texture().get_image()
+	var image: Image = vp.get_texture().get_image()
 	if image == null:
-		_send_response({"error": "Failed to capture screenshot"})
+		_send_response({"error": "Failed to capture image (no rendering device? --headless has no renderer)"})
 		return
 	# Downscale before encoding to cut payload size (token cost); preserves aspect ratio.
 	var max_width: int = int(params.get("max_width", 0))
@@ -389,13 +403,27 @@ func _cmd_screenshot(params: Dictionary = {}) -> void:
 		var ratio: float = float(max_width) / float(image.get_width())
 		image.resize(max_width, maxi(1, int(round(image.get_height() * ratio))), Image.INTERPOLATE_BILINEAR)
 	var fmt: String = String(params.get("format", "png")).to_lower()
-	var buffer: PackedByteArray
-	var mime: String = "image/png"
-	if fmt == "jpg" or fmt == "jpeg":
-		buffer = image.save_jpg_to_buffer(clampf(float(params.get("quality", 0.8)), 0.1, 1.0))
-		mime = "image/jpeg"
-	else:
-		buffer = image.save_png_to_buffer()
+	var is_jpg: bool = fmt == "jpg" or fmt == "jpeg"
+	var quality: float = clampf(float(params.get("quality", 0.8)), 0.1, 1.0)
+	var mime: String = "image/jpeg" if is_jpg else "image/png"
+	# Render-to-file: write the encoded image server-side (CI artifact / no base64 token payload) and
+	# return only the path. `save_to` accepts res:// (dev only), user://, or an absolute path.
+	var save_to: String = String(params.get("save_to", ""))
+	if save_to != "":
+		var err: int = image.save_jpg(save_to, quality) if is_jpg else image.save_png(save_to)
+		if err != OK:
+			_send_response({"error": "Failed to write %s (Error %d)" % [save_to, err]})
+			return
+		_send_response({
+			"success": true,
+			"path": save_to,
+			"abs_path": ProjectSettings.globalize_path(save_to),
+			"width": image.get_width(),
+			"height": image.get_height(),
+			"mime": mime,
+		})
+		return
+	var buffer: PackedByteArray = image.save_jpg_to_buffer(quality) if is_jpg else image.save_png_to_buffer()
 	_send_response({
 		"success": true,
 		"data": Marshalls.raw_to_base64(buffer),
