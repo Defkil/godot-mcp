@@ -388,12 +388,13 @@ class GodotServer {
 
     const autoloadLine = `${this.AUTOLOAD_NAME}="*res://mcp_interaction_server.gd"`;
 
-    if (content.includes('[autoload]')) {
-      // Add after existing [autoload] section header
-      content = content.replace('[autoload]', `[autoload]\n\n${autoloadLine}`);
+    // Insert the line flush under the [autoload] header so removeInteractionServer can strip exactly
+    // `${autoloadLine}\n` and restore the file byte-for-byte (no blank-line accretion across runs).
+    if (content.includes('[autoload]\n')) {
+      content = content.replace('[autoload]\n', `[autoload]\n${autoloadLine}\n`);
     } else {
-      // Add new [autoload] section at end
-      content += `\n[autoload]\n\n${autoloadLine}\n`;
+      // No (newline-terminated) [autoload] section — append a fresh one.
+      content += `\n[autoload]\n${autoloadLine}\n`;
     }
 
     writeFileSync(projectFile, content, 'utf8');
@@ -416,9 +417,15 @@ class GodotServer {
     // Remove autoload line from project.godot
     if (existsSync(projectFile)) {
       let content = readFileSync(projectFile, 'utf8');
-      // Remove the autoload line (and any surrounding blank line)
+      // Exact inverse of the flush injection above: strip `${autoloadLine}\n` and nothing else, so the
+      // file returns to its pre-injection bytes. Fall back to the tolerant regex for legacy injections
+      // (older builds inserted a surrounding blank line).
       const autoloadLine = `${this.AUTOLOAD_NAME}="*res://mcp_interaction_server.gd"`;
-      content = content.replace(new RegExp(`\\n?${autoloadLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`), '\n');
+      if (content.includes(`${autoloadLine}\n`)) {
+        content = content.replace(`${autoloadLine}\n`, '');
+      } else {
+        content = content.replace(new RegExp(`\\n?${autoloadLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`), '\n');
+      }
       writeFileSync(projectFile, content, 'utf8');
       this.logDebug('Removed interaction server autoload from project.godot');
     }
