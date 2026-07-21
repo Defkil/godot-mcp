@@ -388,13 +388,17 @@ class GodotServer {
 
     const autoloadLine = `${this.AUTOLOAD_NAME}="*res://mcp_interaction_server.gd"`;
 
-    // Insert the line flush under the [autoload] header so removeInteractionServer can strip exactly
-    // `${autoloadLine}\n` and restore the file byte-for-byte (no blank-line accretion across runs).
-    if (content.includes('[autoload]\n')) {
-      content = content.replace('[autoload]\n', `[autoload]\n${autoloadLine}\n`);
+    // Insert the line flush under the [autoload] header, preserving the file's line ending (CRLF on
+    // Windows checkouts!), so removeInteractionServer can strip exactly `${autoloadLine}<eol>` and
+    // restore the file byte-for-byte (no dangling section or blank-line accretion across runs).
+    const headerMatch = content.match(/\[autoload\]\r?\n/);
+    if (headerMatch) {
+      const eol = headerMatch[0].endsWith('\r\n') ? '\r\n' : '\n';
+      content = content.replace(headerMatch[0], `[autoload]${eol}${autoloadLine}${eol}`);
     } else {
-      // No (newline-terminated) [autoload] section — append a fresh one.
-      content += `\n[autoload]\n${autoloadLine}\n`;
+      // No [autoload] section — append a fresh one using the file's dominant EOL.
+      const eol = content.includes('\r\n') ? '\r\n' : '\n';
+      content += `${eol}[autoload]${eol}${autoloadLine}${eol}`;
     }
 
     writeFileSync(projectFile, content, 'utf8');
@@ -417,12 +421,16 @@ class GodotServer {
     // Remove autoload line from project.godot
     if (existsSync(projectFile)) {
       let content = readFileSync(projectFile, 'utf8');
-      // Exact inverse of the flush injection above: strip `${autoloadLine}\n` and nothing else, so the
-      // file returns to its pre-injection bytes. Fall back to the tolerant regex for legacy injections
-      // (older builds inserted a surrounding blank line).
+      // Exact inverse of the flush injection: strip `${autoloadLine}<eol>` (LF or CRLF) and nothing
+      // else, so the file returns to its pre-injection bytes. Also collapse a dangling empty
+      // `[autoload]<eol><eol>` left by older/appended injections, and keep a tolerant fallback.
+      const esc = this.AUTOLOAD_NAME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const lineRe = new RegExp(`${esc}="\\*res://mcp_interaction_server\\.gd"\\r?\\n`);
       const autoloadLine = `${this.AUTOLOAD_NAME}="*res://mcp_interaction_server.gd"`;
-      if (content.includes(`${autoloadLine}\n`)) {
-        content = content.replace(`${autoloadLine}\n`, '');
+      if (lineRe.test(content)) {
+        content = content.replace(lineRe, '');
+        // If injection had appended a fresh section, the header is now empty — drop it.
+        content = content.replace(/(\r?\n)\[autoload\]\r?\n(\s*)$/, '$2');
       } else {
         content = content.replace(new RegExp(`\\n?${autoloadLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n?`), '\n');
       }
