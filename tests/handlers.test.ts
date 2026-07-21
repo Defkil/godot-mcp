@@ -1118,7 +1118,8 @@ describe('Lifecycle handlers', () => {
   it('handleGameScreenshot returns image content type', () => {
     expect(sourceCode).toContain('handleGameScreenshot');
     expect(sourceCode).toContain("type: 'image'");
-    expect(sourceCode).toContain("mimeType: 'image/png'");
+    // mimeType is now driven by the capture format (png default, jpg optional).
+    expect(sourceCode).toContain("mimeType: response.mime || 'image/png'");
   });
 
   it('handleUpdateProjectUids checks Godot version >= 4.4', () => {
@@ -1932,8 +1933,8 @@ describe('Tool dispatch switch statement', () => {
   it('every case returns await this.handle*', () => {
     const caseRegex = /case '(\w+)':\s*\n\s*return await this\.handle/g;
     const matches = [...sourceCode.matchAll(caseRegex)];
-    // Should match all 157 tools
-    expect(matches.length).toBe(157);
+    // Should match all 159 tools
+    expect(matches.length).toBe(159);
   });
 
   it('no case falls through without return', () => {

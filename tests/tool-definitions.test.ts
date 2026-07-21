@@ -9,8 +9,8 @@ const ALL_TOOL_NAMES = [
   'launch_editor', 'run_project', 'get_debug_output', 'stop_project',
   'get_godot_version', 'list_projects', 'get_project_info', 'create_scene',
   'add_node', 'load_sprite', 'export_mesh_library', 'save_scene',
-  'get_uid', 'update_project_uids', 'game_screenshot', 'game_click',
-  'game_key_press', 'game_mouse_move', 'game_get_ui', 'game_get_scene_tree',
+  'get_uid', 'update_project_uids', 'game_screenshot', 'game_ping', 'game_click',
+  'game_hit_test', 'game_key_press', 'game_mouse_move', 'game_get_ui', 'game_get_scene_tree',
   'game_eval', 'game_get_property', 'game_set_property', 'game_call_method',
   'game_get_node_info', 'game_instantiate_scene', 'game_remove_node',
   'game_change_scene', 'game_pause', 'game_performance', 'game_wait',
@@ -71,8 +71,8 @@ beforeAll(() => {
 });
 
 describe('Tool definitions', () => {
-  it('defines exactly 157 tools', () => {
-    expect(ALL_TOOL_NAMES).toHaveLength(157);
+  it('defines exactly 159 tools', () => {
+    expect(ALL_TOOL_NAMES).toHaveLength(159);
   });
 
   it('all tool names are unique', () => {

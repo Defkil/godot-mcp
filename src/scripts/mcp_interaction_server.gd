@@ -10,8 +10,9 @@ var _buffer: String = ""
 var _busy: bool = false
 var _busy_since: float = 0.0
 var _current_id: Variant = null
-const PORT: int = 9090
+const DEFAULT_PORT: int = 9090
 const BUSY_TIMEOUT: float = 120.0
+var _port: int = DEFAULT_PORT
 var _key_map: Dictionary
 var _held_keys: Dictionary = {}
 
@@ -19,12 +20,16 @@ func _ready() -> void:
 	# Ensure MCP server keeps processing even when game is paused
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_init_key_map()
+	# Port is env-driven so the launcher can run several isolated instances / avoid collisions.
+	var env_port: String = OS.get_environment("GODOT_MCP_INTERACTION_PORT")
+	if env_port != "" and env_port.is_valid_int():
+		_port = env_port.to_int()
 	_server = TCPServer.new()
-	var err: int = _server.listen(PORT, "127.0.0.1")
+	var err: int = _server.listen(_port, "127.0.0.1")
 	if err != OK:
-		push_error("McpInteractionServer: Failed to listen on port %d, error: %d" % [PORT, err])
+		push_error("McpInteractionServer: Failed to listen on port %d, error: %d" % [_port, err])
 		return
-	print("McpInteractionServer: Listening on 127.0.0.1:%d" % PORT)
+	print("McpInteractionServer: Listening on 127.0.0.1:%d" % _port)
 
 
 func _process(_delta: float) -> void:
@@ -97,6 +102,20 @@ func _handle_command(json_str: String) -> void:
 		return
 
 	var req_id: Variant = data.get("id", null)
+	var command: String = data.get("command", "")
+	var params: Dictionary = data.get("params", {})
+
+	# Liveness + escape-hatch: `ping` reports status without touching the busy state, and a hung command
+	# can be cleared with `ping {reset: true}` — neither is blocked by the busy gate.
+	if command == "ping":
+		var do_reset: bool = bool(params.get("reset", false))
+		if do_reset:
+			_busy = false
+			_busy_since = 0.0
+			_current_id = null
+		_send_response_raw({"success": true, "pong": true, "frame": Engine.get_frames_drawn(),
+			"busy": _busy, "reset": do_reset, "port": _port, "id": req_id})
+		return
 
 	if _busy:
 		_send_response_raw({"error": "Server busy processing another command. Try again.", "id": req_id})
@@ -105,13 +124,10 @@ func _handle_command(json_str: String) -> void:
 	_busy_since = Time.get_ticks_msec() / 1000.0
 	_current_id = req_id
 
-	var command: String = data.get("command", "")
-	var params: Dictionary = data.get("params", {})
-
 	match command:
 		# Async commands (use await)
 		"screenshot":
-			await _cmd_screenshot()
+			await _cmd_screenshot(params)
 		"click":
 			await _cmd_click(params)
 		"key_press":
@@ -124,7 +140,9 @@ func _handle_command(json_str: String) -> void:
 		"mouse_move":
 			_cmd_mouse_move(params)
 		"get_ui_elements":
-			_cmd_get_ui_elements()
+			_cmd_get_ui_elements(params)
+		"hit_test":
+			_cmd_hit_test(params)
 		"get_scene_tree":
 			_cmd_get_scene_tree()
 		"get_property":
@@ -356,30 +374,55 @@ func _send_response_raw(data: Dictionary) -> void:
 
 
 # --- Screenshot ---
-func _cmd_screenshot() -> void:
-	# Wait one frame so the viewport is fully rendered
-	await get_tree().process_frame
+func _cmd_screenshot(params: Dictionary = {}) -> void:
+	# wait_frames lets callers skip mid-transition frames; default 1 = "let this frame finish rendering".
+	var wait_frames: int = maxi(1, int(params.get("wait_frames", 1)))
+	for _i in wait_frames:
+		await get_tree().process_frame
 	var image: Image = get_viewport().get_texture().get_image()
 	if image == null:
 		_send_response({"error": "Failed to capture screenshot"})
 		return
-	var png_buffer: PackedByteArray = image.save_png_to_buffer()
-	var base64_str: String = Marshalls.raw_to_base64(png_buffer)
+	# Downscale before encoding to cut payload size (token cost); preserves aspect ratio.
+	var max_width: int = int(params.get("max_width", 0))
+	if max_width > 0 and image.get_width() > max_width:
+		var ratio: float = float(max_width) / float(image.get_width())
+		image.resize(max_width, maxi(1, int(round(image.get_height() * ratio))), Image.INTERPOLATE_BILINEAR)
+	var fmt: String = String(params.get("format", "png")).to_lower()
+	var buffer: PackedByteArray
+	var mime: String = "image/png"
+	if fmt == "jpg" or fmt == "jpeg":
+		buffer = image.save_jpg_to_buffer(clampf(float(params.get("quality", 0.8)), 0.1, 1.0))
+		mime = "image/jpeg"
+	else:
+		buffer = image.save_png_to_buffer()
 	_send_response({
 		"success": true,
-		"data": base64_str,
+		"data": Marshalls.raw_to_base64(buffer),
 		"width": image.get_width(),
-		"height": image.get_height()
+		"height": image.get_height(),
+		"mime": mime,
 	})
 
 
 # --- Click ---
 func _cmd_click(params: Dictionary) -> void:
-	var x: float = float(params.get("x", 0))
-	var y: float = float(params.get("y", 0))
 	var button: int = int(params.get("button", MOUSE_BUTTON_LEFT))
 
-	var pos: Vector2 = Vector2(x, y)
+	# node_path clicks the global-rect center of a Control, robust to stretch/content-scale mapping
+	# that raw pixel coords miss. Falls back to explicit x/y otherwise.
+	var pos: Vector2
+	var node_path: String = String(params.get("node_path", ""))
+	if node_path != "":
+		var node: Node = get_node_or_null(NodePath(node_path))
+		if node == null or not (node is Control):
+			_send_response({"error": "node_path not found or not a Control: %s" % node_path})
+			return
+		pos = (node as Control).get_global_rect().get_center()
+	else:
+		pos = Vector2(float(params.get("x", 0)), float(params.get("y", 0)))
+	var x: float = pos.x
+	var y: float = pos.y
 
 	# Mouse button press
 	var press_event: InputEventMouseButton = InputEventMouseButton.new()
@@ -461,22 +504,34 @@ func _cmd_mouse_move(params: Dictionary) -> void:
 
 
 # --- Get UI Elements ---
-func _cmd_get_ui_elements() -> void:
+func _cmd_get_ui_elements(params: Dictionary = {}) -> void:
+	# By default only effectively-visible controls with real area (mirrors "what the user can see").
+	# include_hidden returns every Control with visible/hittable flags for debugging layout.
+	var include_hidden: bool = bool(params.get("include_hidden", false))
 	var elements: Array = []
-	_collect_ui_elements(get_tree().root, elements)
+	_collect_ui_elements(get_tree().root, elements, include_hidden)
 	_send_response({"success": true, "elements": elements})
 
 
-func _collect_ui_elements(node: Node, elements: Array) -> void:
+func _collect_ui_elements(node: Node, elements: Array, include_hidden: bool) -> void:
 	if node is Control:
 		var ctrl: Control = node as Control
-		if ctrl.visible and ctrl.get_global_rect().size.x > 0:
+		var vis: bool = ctrl.is_visible_in_tree()   # respects hidden ancestors, unlike ctrl.visible
+		var rect: Rect2 = ctrl.get_global_rect()
+		var has_area: bool = rect.size.x > 0.0 and rect.size.y > 0.0
+		if include_hidden or (vis and has_area):
+			var hittable: bool = vis and has_area \
+				and ctrl.mouse_filter != Control.MOUSE_FILTER_IGNORE \
+				and not (ctrl is BaseButton and (ctrl as BaseButton).disabled)
 			var info: Dictionary = {
 				"name": ctrl.name,
 				"type": ctrl.get_class(),
 				"path": str(ctrl.get_path()),
-				"position": {"x": ctrl.global_position.x, "y": ctrl.global_position.y},
-				"size": {"width": ctrl.size.x, "height": ctrl.size.y},
+				"position": {"x": rect.position.x, "y": rect.position.y},
+				"size": {"width": rect.size.x, "height": rect.size.y},
+				"center": {"x": rect.get_center().x, "y": rect.get_center().y},
+				"visible": vis,
+				"hittable": hittable,
 			}
 			# Get text content for common text-bearing nodes
 			if ctrl is Label:
@@ -491,7 +546,40 @@ func _collect_ui_elements(node: Node, elements: Array) -> void:
 			elements.append(info)
 
 	for child in node.get_children():
-		_collect_ui_elements(child, elements)
+		_collect_ui_elements(child, elements, include_hidden)
+
+
+# Topmost hittable Control containing a point. ponytail: uses tree order as a draw-order proxy (the
+# last matching node wins) — correct for ordinary UIs; z_index/CanvasLayer reordering isn't resolved.
+func _cmd_hit_test(params: Dictionary) -> void:
+	var point: Vector2 = Vector2(float(params.get("x", 0)), float(params.get("y", 0)))
+	var matches: Array = []
+	_collect_hits(get_tree().root, point, matches)
+	if matches.is_empty():
+		_send_response({"success": true, "hit": null})
+		return
+	var top: Control = matches[matches.size() - 1]
+	var info: Dictionary = {
+		"name": top.name,
+		"type": top.get_class(),
+		"path": str(top.get_path()),
+		"center": {"x": top.get_global_rect().get_center().x, "y": top.get_global_rect().get_center().y},
+	}
+	if top is Button:
+		info["text"] = (top as Button).text
+	elif top is Label:
+		info["text"] = (top as Label).text
+	_send_response({"success": true, "hit": info})
+
+
+func _collect_hits(node: Node, point: Vector2, matches: Array) -> void:
+	if node is Control:
+		var ctrl: Control = node as Control
+		if ctrl.is_visible_in_tree() and ctrl.mouse_filter != Control.MOUSE_FILTER_IGNORE \
+			and ctrl.get_global_rect().has_point(point):
+			matches.append(ctrl)
+	for child in node.get_children():
+		_collect_hits(child, point, matches)
 
 
 # --- Get Scene Tree ---

@@ -120,7 +120,7 @@ class GodotServer {
   private nextRequestId: number = 1;
   private lastErrorIndex: number = 0;
   private lastLogIndex: number = 0;
-  private readonly INTERACTION_PORT = 9090;
+  private readonly INTERACTION_PORT = parseInt(process.env.GODOT_MCP_INTERACTION_PORT || '', 10) || 9090;
   private readonly AUTOLOAD_NAME = 'McpInteractionServer';
 
   constructor(config?: GodotServerConfig) {
@@ -1085,31 +1085,78 @@ class GodotServer {
         },
         {
           name: 'game_screenshot',
-          description: 'Screenshot the running game (returns base64 PNG)',
+          description: 'Screenshot the running game (returns base64 image). Options trim payload size.',
           inputSchema: {
             type: 'object',
-            properties: {},
+            properties: {
+              max_width: {
+                type: 'number',
+                description: 'Downscale so width <= this many px (keeps aspect). 0/omitted = full res.',
+              },
+              wait_frames: {
+                type: 'number',
+                description: 'Render this many frames before capturing (skip mid-transition). Default: 1',
+              },
+              format: {
+                type: 'string',
+                description: '"png" (default, lossless) or "jpg" (smaller).',
+              },
+              quality: {
+                type: 'number',
+                description: 'JPEG quality 0.1-1.0 (only for format="jpg"). Default: 0.8',
+              },
+            },
+            required: [],
+          },
+        },
+        {
+          name: 'game_ping',
+          description: 'Liveness/status of the server; reset:true clears a hung command (no busy gate)',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              reset: {
+                type: 'boolean',
+                description: 'Force-clear the busy flag of a stuck command. Default: false',
+              },
+            },
             required: [],
           },
         },
         {
           name: 'game_click',
-          description: 'Click at a position in the running Godot game window',
+          description: 'Click at a position, or at the center of a Control by node_path',
           inputSchema: {
             type: 'object',
             properties: {
               x: {
                 type: 'number',
-                description: 'X coordinate to click',
+                description: 'X coordinate to click (ignored if node_path is given)',
               },
               y: {
                 type: 'number',
-                description: 'Y coordinate to click',
+                description: 'Y coordinate to click (ignored if node_path is given)',
+              },
+              node_path: {
+                type: 'string',
+                description: 'Path of a Control to click at its global-rect center (robust to stretch)',
               },
               button: {
                 type: 'number',
                 description: 'Mouse button (1=left, 2=right, 3=middle). Default: 1',
               },
+            },
+            required: [],
+          },
+        },
+        {
+          name: 'game_hit_test',
+          description: 'Return the topmost hittable Control at a screen point (x, y)',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              x: { type: 'number', description: 'X coordinate' },
+              y: { type: 'number', description: 'Y coordinate' },
             },
             required: ['x', 'y'],
           },
@@ -1164,10 +1211,15 @@ class GodotServer {
         },
         {
           name: 'game_get_ui',
-          description: 'Get visible UI elements from the running game',
+          description: 'Get UI elements from the running game (with visible/hittable flags + center)',
           inputSchema: {
             type: 'object',
-            properties: {},
+            properties: {
+              include_hidden: {
+                type: 'boolean',
+                description: 'Include hidden/zero-area Controls (with flags) for debugging. Default: false',
+              },
+            },
             required: [],
           },
         },
@@ -3340,15 +3392,19 @@ class GodotServer {
         case 'update_project_uids':
           return await this.handleUpdateProjectUids(request.params.arguments);
         case 'game_screenshot':
-          return await this.handleGameScreenshot();
+          return await this.handleGameScreenshot(request.params.arguments);
+        case 'game_ping':
+          return await this.handleGamePing(request.params.arguments);
         case 'game_click':
           return await this.handleGameClick(request.params.arguments);
+        case 'game_hit_test':
+          return await this.handleGameHitTest(request.params.arguments);
         case 'game_key_press':
           return await this.handleGameKeyPress(request.params.arguments);
         case 'game_mouse_move':
           return await this.handleGameMouseMove(request.params.arguments);
         case 'game_get_ui':
-          return await this.handleGameGetUi();
+          return await this.handleGameGetUi(request.params.arguments);
         case 'game_get_scene_tree':
           return await this.handleGameGetSceneTree();
         // New runtime interaction tools
@@ -3771,7 +3827,11 @@ class GodotServer {
       }
 
       this.logDebug(`Running Godot project: ${args.projectPath}`);
-      const process = spawn(this.godotPath!, cmdArgs, { stdio: 'pipe' });
+      // Hand the injected server the exact port we'll connect on, so both sides stay in sync.
+      const process = spawn(this.godotPath!, cmdArgs, {
+        stdio: 'pipe',
+        env: { ...globalThis.process.env, GODOT_MCP_INTERACTION_PORT: String(this.INTERACTION_PORT) },
+      });
       const output: string[] = [];
       const errors: string[] = [];
 
@@ -4585,7 +4645,7 @@ class GodotServer {
   /**
    * Handle the game_screenshot tool
    */
-  private async handleGameScreenshot() {
+  private async handleGameScreenshot(args?: any) {
     if (!this.activeProcess) {
       return createErrorResponse('No active Godot process. Use run_project first.');
     }
@@ -4593,8 +4653,15 @@ class GodotServer {
       return createErrorResponse('Not connected to game interaction server. Wait a moment and try again.');
     }
 
+    const a = normalizeParameters(args || {});
+    const params: Record<string, any> = {};
+    if (a.max_width !== undefined) params.max_width = a.max_width;
+    if (a.wait_frames !== undefined) params.wait_frames = a.wait_frames;
+    if (a.format !== undefined) params.format = a.format;
+    if (a.quality !== undefined) params.quality = a.quality;
+
     try {
-      const response = await this.sendGameCommand('screenshot');
+      const response = await this.sendGameCommand('screenshot', params, 15000);
       if (response.error) {
         return createErrorResponse(`Screenshot failed: ${response.error}`);
       }
@@ -4603,7 +4670,7 @@ class GodotServer {
           {
             type: 'image',
             data: response.data,
-            mimeType: 'image/png',
+            mimeType: response.mime || 'image/png',
           },
           {
             type: 'text',
@@ -4616,8 +4683,31 @@ class GodotServer {
     }
   }
 
+  private async handleGamePing(args?: any) {
+    if (!this.activeProcess) return createErrorResponse('No active Godot process. Use run_project first.');
+    if (!this.gameConnection.connected) return createErrorResponse('Not connected to game interaction server.');
+    const a = normalizeParameters(args || {});
+    try {
+      // Short timeout: ping bypasses the busy gate on the server, so a slow reply means real trouble.
+      const response = await this.sendGameCommand('ping', a.reset ? { reset: true } : {}, 3000);
+      if (response.error) return createErrorResponse(`Ping failed: ${response.error}`);
+      return { content: [{ type: 'text', text: JSON.stringify(response, null, 2) }] };
+    } catch (error: any) {
+      return createErrorResponse(`Ping failed: ${error?.message || 'Unknown error'}`);
+    }
+  }
+
   private async handleGameClick(args: any) {
-    return this.gameCommand('click', args, a => ({ x: a.x ?? 0, y: a.y ?? 0, button: a.button ?? 1 }));
+    return this.gameCommand('click', args, a => {
+      const p: Record<string, any> = { button: a.button ?? 1 };
+      if (a.node_path) p.node_path = a.node_path;
+      else { p.x = a.x ?? 0; p.y = a.y ?? 0; }
+      return p;
+    });
+  }
+
+  private async handleGameHitTest(args: any) {
+    return this.gameCommand('hit_test', args, a => ({ x: a.x ?? 0, y: a.y ?? 0 }));
   }
 
   private async handleGameKeyPress(args: any) {
@@ -4636,8 +4726,8 @@ class GodotServer {
     }));
   }
 
-  private async handleGameGetUi() {
-    return this.gameCommand('get_ui_elements', {}, () => ({}));
+  private async handleGameGetUi(args?: any) {
+    return this.gameCommand('get_ui_elements', args, a => (a.include_hidden ? { include_hidden: true } : {}));
   }
 
   private async handleGameGetSceneTree() {
